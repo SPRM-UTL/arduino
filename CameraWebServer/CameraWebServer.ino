@@ -7,6 +7,9 @@
 #include <BLEUtils.h>
 #include <BLEServer.h>
 #include <BLE2902.h>
+#include <WebSocketsClient.h>
+
+WebSocketsClient webSocket;
 
 // ===========================
 // Select camera model in board_config.h
@@ -17,8 +20,10 @@
 #define EEPROM_SIZE 512
 #define SSID_ADDR 0
 #define PASS_ADDR 100
+#define URL_ADDR 200
 #define MAX_SSID_LEN 32
 #define MAX_PASS_LEN 64
+#define MAX_URL_LEN 128
 
 // Configuración BLE
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -30,39 +35,61 @@ BLECharacteristic *pIpCharacteristic = nullptr;
 bool deviceConnected = false;
 String currentSSID = "";
 String currentPassword = "";
+String currentBackendUrl = "";
 String esp32IP = "";
 
 void startCameraServer();
 void setupLedFlash();
 
-void saveWiFiCredentials(String ssid, String password) {
-    Serial.println("Guardando credenciales WiFi...");
+void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
+    switch(type) {
+        case WStype_DISCONNECTED:
+            Serial.println("[WSc] Disconnected!");
+            break;
+        case WStype_CONNECTED:
+            Serial.printf("[WSc] Connected to url: %s\n", payload);
+            break;
+        case WStype_TEXT:
+            Serial.printf("[WSc] get text: %s\n", payload);
+            break;
+    }
+}
+
+void saveWiFiCredentials(String ssid, String password, String url) {
+    Serial.println("Guardando credenciales WiFi y URL...");
     for (int i = SSID_ADDR; i < SSID_ADDR + MAX_SSID_LEN; i++) EEPROM.write(i, 0);
     for (int i = PASS_ADDR; i < PASS_ADDR + MAX_PASS_LEN; i++) EEPROM.write(i, 0);
+    for (int i = URL_ADDR; i < URL_ADDR + MAX_URL_LEN; i++) EEPROM.write(i, 0);
     
     for (int i = 0; i < ssid.length() && i < MAX_SSID_LEN; i++) EEPROM.write(SSID_ADDR + i, ssid[i]);
     for (int i = 0; i < password.length() && i < MAX_PASS_LEN; i++) EEPROM.write(PASS_ADDR + i, password[i]);
+    for (int i = 0; i < url.length() && i < MAX_URL_LEN; i++) EEPROM.write(URL_ADDR + i, url[i]);
     
     if (EEPROM.commit()) {
-        Serial.println("Credenciales WiFi guardadas exitosamente");
+        Serial.println("Credenciales y URL guardadas exitosamente");
         currentSSID = ssid;
         currentPassword = password;
+        currentBackendUrl = url;
     } else {
-        Serial.println("Error al guardar credenciales en EEPROM");
+        Serial.println("Error al guardar en EEPROM");
     }
 }
 
 void loadWiFiCredentials() {
     char ssid[MAX_SSID_LEN + 1] = {0};
     char password[MAX_PASS_LEN + 1] = {0};
+    char url[MAX_URL_LEN + 1] = {0};
     
     for (int i = 0; i < MAX_SSID_LEN; i++) ssid[i] = EEPROM.read(SSID_ADDR + i);
     ssid[MAX_SSID_LEN] = '\0';
     for (int i = 0; i < MAX_PASS_LEN; i++) password[i] = EEPROM.read(PASS_ADDR + i);
     password[MAX_PASS_LEN] = '\0';
+    for (int i = 0; i < MAX_URL_LEN; i++) url[i] = EEPROM.read(URL_ADDR + i);
+    url[MAX_URL_LEN] = '\0';
     
     currentSSID = String(ssid);
     currentPassword = String(password);
+    currentBackendUrl = String(url);
     
     if (currentSSID.length() > 0) {
         Serial.println("Credenciales WiFi cargadas: " + currentSSID);
@@ -87,18 +114,20 @@ class WifiConfigCallback: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
         String value = pCharacteristic->getValue().c_str();
         if (value.length() > 0) {
-            Serial.println("Datos WiFi recibidos: " + value);
-            int separator = value.indexOf('|');
-            if (separator != -1) {
-                String ssid = value.substring(0, separator);
-                String password = value.substring(separator + 1);
-                saveWiFiCredentials(ssid, password);
+            Serial.println("Datos de config recibidos: " + value);
+            int firstSep = value.indexOf('|');
+            int secondSep = value.indexOf('|', firstSep + 1);
+            if (firstSep != -1 && secondSep != -1) {
+                String ssid = value.substring(0, firstSep);
+                String password = value.substring(firstSep + 1, secondSep);
+                String url = value.substring(secondSep + 1);
+                saveWiFiCredentials(ssid, password, url);
                 
-                Serial.println("Reiniciando ESP32 para aplicar configuración Wi-Fi...");
+                Serial.println("Reiniciando ESP32 para aplicar configuración Wi-Fi y Backend...");
                 delay(1000);
                 ESP.restart();
             } else {
-                Serial.println("Formato incorrecto. Use SSID|PASSWORD");
+                Serial.println("Formato incorrecto. Use SSID|PASSWORD|BACKEND_URL");
             }
         }
     }
@@ -246,6 +275,37 @@ void setup() {
           }
 
           startCameraServer();
+
+          if (currentBackendUrl.length() > 0) {
+              String macAddress = WiFi.macAddress();
+              String wsPath = "/ws?deviceKey=" + macAddress;
+              
+              bool isWss = currentBackendUrl.startsWith("wss://");
+              String host = currentBackendUrl;
+              if (isWss) host.replace("wss://", "");
+              else host.replace("ws://", "");
+              
+              int slashIndex = host.indexOf('/');
+              if (slashIndex != -1) host = host.substring(0, slashIndex);
+              
+              int port = isWss ? 443 : 80;
+              int colonIndex = host.indexOf(':');
+              if (colonIndex != -1) {
+                  port = host.substring(colonIndex + 1).toInt();
+                  host = host.substring(0, colonIndex);
+              }
+              
+              Serial.println("Conectando a WS Host: " + host + " Port: " + String(port) + " Path: " + wsPath);
+              if (isWss) {
+                  webSocket.beginSSL(host, port, wsPath);
+              } else {
+                  webSocket.begin(host, port, wsPath);
+              }
+              webSocket.onEvent(webSocketEvent);
+              webSocket.setReconnectInterval(5000);
+              // Send ping every 10 seconds to keep connection alive
+              webSocket.enableHeartbeat(10000, 3000, 2);
+          }
       } else {
           Serial.println("Error al conectar a WiFi, esperando configuración por Bluetooth...");
       }
@@ -256,13 +316,16 @@ void setup() {
 
 void loop() {
   static unsigned long lastUpdate = 0;
-  if (WiFi.status() == WL_CONNECTED && millis() - lastUpdate > 5000) {
-      esp32IP = WiFi.localIP().toString();
-      if (deviceConnected && pIpCharacteristic != nullptr) {
-          pIpCharacteristic->setValue(esp32IP.c_str());
-          pIpCharacteristic->notify();
+  if (WiFi.status() == WL_CONNECTED) {
+      if (millis() - lastUpdate > 5000) {
+          esp32IP = WiFi.localIP().toString();
+          if (deviceConnected && pIpCharacteristic != nullptr) {
+              pIpCharacteristic->setValue(esp32IP.c_str());
+              pIpCharacteristic->notify();
+          }
+          lastUpdate = millis();
       }
-      lastUpdate = millis();
+      webSocket.loop();
   }
   delay(10);
 }
