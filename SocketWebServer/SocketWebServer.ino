@@ -15,7 +15,7 @@ WebSocketsClient webSocket;
 #define SSID_ADDR 0
 #define PASS_ADDR 100
 #define URL_ADDR 200
-#define MAX_SSID_LEN 32
+#define MAX_SSID_LEN 32 
 #define MAX_PASS_LEN 64
 #define MAX_URL_LEN 128
 
@@ -174,14 +174,30 @@ void setup() {
     if (!EEPROM.begin(EEPROM_SIZE)) {
         Serial.println("Error al inicializar EEPROM");
     }
+
+    // Descomentar estas lineas para borrar la memoria
+    //for (int i = 0; i < 512; i++) EEPROM.write(i, 0);
+    //EEPROM.commit();
+
     loadWiFiCredentials();
-    initBLE();
 
     if (currentSSID.length() > 0) {
-        Serial.println("Conectando a Wi-Fi: " + currentSSID);
+        currentSSID.trim();
+        currentPassword.trim();
+        
+        Serial.println("Conectando a Wi-Fi: [" + currentSSID + "]");
+        
+        Serial.println("[DEBUG] Iniciando stack de Wi-Fi...");
+        WiFi.mode(WIFI_STA);
+        delay(100);
+        
+        Serial.println("[DEBUG] Ejecutando WiFi.begin()...");
         WiFi.begin(currentSSID.c_str(), currentPassword.c_str());
+        
+        Serial.println("[DEBUG] WiFi.begin() completado. Desactivando Sleep...");
         WiFi.setSleep(false);
         
+        Serial.println("[DEBUG] Entrando al bucle de espera...");
         int attempts = 0;
         while (WiFi.status() != WL_CONNECTED && attempts < 40) {
             delay(500);
@@ -193,14 +209,8 @@ void setup() {
         if (WiFi.status() == WL_CONNECTED) {
             esp32IP = WiFi.localIP().toString();
             Serial.println("WiFi conectado");
-            Serial.print("IP del Socket: ");
-            Serial.println(esp32IP);
-            
-            if (pIpCharacteristic != nullptr) {
-                pIpCharacteristic->setValue(esp32IP.c_str());
-                pIpCharacteristic->notify();
-            }
 
+            // Intentar conectar al WebSocket
             if (currentBackendUrl.length() > 0) {
                 String macAddress = WiFi.macAddress();
                 String wsPath = "/ws?deviceKey=" + macAddress;
@@ -220,7 +230,6 @@ void setup() {
                     host = host.substring(0, colonIndex);
                 }
                 
-                Serial.println("Conectando a WS Host: " + host + " Port: " + String(port) + " Path: " + wsPath);
                 if (isWss) {
                     webSocket.beginSSL(host, port, wsPath);
                 } else {
@@ -230,11 +239,22 @@ void setup() {
                 webSocket.setReconnectInterval(5000);
                 webSocket.enableHeartbeat(10000, 3000, 2);
             }
+                        
         } else {
-            Serial.println("Error al conectar a WiFi, esperando configuración por Bluetooth...");
+            Serial.println("Error al conectar a WiFi. Apagando antena Wi-Fi...");
+            
+            // Apagamos la antena WiFi para liberar toda su memoria
+            WiFi.disconnect(true, true);
+            WiFi.mode(WIFI_OFF);
+            delay(500);
+            
+            Serial.println("Iniciando BLE de rescate...");
+            initBLE();
         }
     } else {
-        Serial.println("No hay configuración Wi-Fi guardada, esperando configuración por Bluetooth...");
+        Serial.println("No hay configuración Wi-Fi guardada.");
+        Serial.println("Iniciando BLE para configuración inicial...");
+        initBLE();
     }
 }
 

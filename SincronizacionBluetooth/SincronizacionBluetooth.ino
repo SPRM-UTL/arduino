@@ -94,6 +94,14 @@ void setup() {
     if (!EEPROM.begin(EEPROM_SIZE)) {
         Serial.println("Error al inicializar EEPROM");
     }
+
+    // BORRAR EEPROM
+    /*for (int i = 0; i < EEPROM_SIZE; i++) {
+        EEPROM.write(i, 0);
+    }
+    EEPROM.commit();
+
+    Serial.println("EEPROM borrada");*/
     
     // Cargar credenciales guardadas
     loadWiFiCredentials();
