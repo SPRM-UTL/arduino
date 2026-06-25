@@ -2,6 +2,8 @@
 #include <WiFi.h>
 
 #include <EEPROM.h>
+#include <esp_system.h>
+#include <esp_mac.h>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
@@ -212,8 +214,12 @@ void setup() {
 
             // Intentar conectar al WebSocket
             if (currentBackendUrl.length() > 0) {
-                String macAddress = String(BLEDevice::getAddress().toString().c_str());
-                macAddress.toUpperCase();
+                uint8_t btMac[6];
+                esp_read_mac(btMac, ESP_MAC_BT);
+                char macStr[18];
+                snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", btMac[0], btMac[1], btMac[2], btMac[3], btMac[4], btMac[5]);
+                String macAddress = String(macStr);
+                
                 String wsPath = "/ws?deviceKey=" + macAddress;
                 
                 bool isWss = currentBackendUrl.startsWith("wss://");
