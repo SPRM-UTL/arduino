@@ -221,6 +221,9 @@ void setup() {
                 String macAddress = String(macStr);
                 
                 String wsPath = "/ws?deviceKey=" + macAddress;
+                Serial.println("[DEBUG] MAC BT Leída: " + macAddress);
+                Serial.println("[DEBUG] Intentando WebSocket WS Path: " + wsPath);
+
                 
                 bool isWss = currentBackendUrl.startsWith("wss://");
                 String host = currentBackendUrl;
