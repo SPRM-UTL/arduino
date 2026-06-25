@@ -31,6 +31,7 @@ String currentSSID = "";
 String currentPassword = "";
 String currentBackendUrl = "";
 String esp32IP = "";
+bool shouldRestart = false;
 
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
@@ -127,9 +128,8 @@ class WifiConfigCallback: public BLECharacteristicCallbacks {
                 String url = value.substring(secondSep + 1);
                 saveWiFiCredentials(ssid, password, url);
                 
-                Serial.println("Reiniciando ESP32 para aplicar configuración Wi-Fi y Backend...");
-                delay(1000);
-                ESP.restart();
+                Serial.println("Configuración recibida, reiniciando pronto...");
+                shouldRestart = true;
             } else {
                 Serial.println("Formato incorrecto. Use SSID|PASSWORD|BACKEND_URL");
             }
@@ -212,7 +212,8 @@ void setup() {
 
             // Intentar conectar al WebSocket
             if (currentBackendUrl.length() > 0) {
-                String macAddress = WiFi.macAddress();
+                String macAddress = String(BLEDevice::getAddress().toString().c_str());
+                macAddress.toUpperCase();
                 String wsPath = "/ws?deviceKey=" + macAddress;
                 
                 bool isWss = currentBackendUrl.startsWith("wss://");
@@ -259,6 +260,11 @@ void setup() {
 }
 
 void loop() {
+    if (shouldRestart) {
+        delay(1000);
+        ESP.restart();
+    }
+
     static unsigned long lastUpdate = 0;
     if (WiFi.status() == WL_CONNECTED) {
         if (millis() - lastUpdate > 5000) {
