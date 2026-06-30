@@ -48,20 +48,23 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             break;
         case WStype_TEXT: {
             String text = String((char*)payload);
-            Serial.printf("[WSc] Mensaje recibido: %s\n", text.c_str());
+            text.trim();
+            Serial.printf("[WSc] Comando recibido: '%s'\n", text.c_str());
             
-            // Simulación del Relé
             if (text == "ON") {
-                Serial.println("=========================================");
-                Serial.println(">> COMANDO RECIBIDO: ENCHUFAR/ENCENDER <<");
-                Serial.println("=========================================");
+                Serial.println("--- COMANDO: ENCENDER ---");
             } else if (text == "OFF") {
-                Serial.println("=========================================");
-                Serial.println(">> COMANDO RECIBIDO: DESENCHUFAR/APAGAR<<");
-                Serial.println("=========================================");
+                Serial.println("--- COMANDO: APAGAR ---");
+            } else {
+                Serial.printf("[WSc] Comando desconocido: '%s'\n", text.c_str());
             }
             break;
         }
+        case WStype_ERROR:
+            Serial.println("[WSc] Error en WebSocket");
+            break;
+        default:
+            break;
     }
 }
 
@@ -183,7 +186,7 @@ void setup() {
     Serial.begin(115200);
     Serial.setDebugOutput(true);
     Serial.println();
-    Serial.println("Iniciando Socket ESP32...");
+    Serial.println("=== Iniciando Socket ESP32 (Manordomo) ===");
 
     if (!EEPROM.begin(EEPROM_SIZE)) {
         Serial.println("Error al inicializar EEPROM");
