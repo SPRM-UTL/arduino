@@ -265,7 +265,8 @@ void setup() {
                 }
                 webSocket.onEvent(webSocketEvent);
                 webSocket.setReconnectInterval(5000);
-                webSocket.enableHeartbeat(10000, 3000, 2);
+                // Aumentamos los tiempos del heartbeat para evitar desconexiones por latencia
+                webSocket.enableHeartbeat(15000, 10000, 2);
             }
                         
         } else {
