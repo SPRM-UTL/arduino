@@ -3,6 +3,8 @@
 #include <WiFi.h>
 
 #include <EEPROM.h>
+#include <esp_system.h>
+#include <esp_mac.h>
 #include <BLEDevice.h>
 #include <BLEUtils.h>
 #include <BLEServer.h>
@@ -17,13 +19,15 @@ WebSocketsClient webSocket;
 #include "board_config.h"
 
 // Configuración EEPROM
-#define EEPROM_SIZE 512
+#define EEPROM_SIZE 1024
 #define SSID_ADDR 0
 #define PASS_ADDR 100
 #define URL_ADDR 200
+#define TOKEN_ADDR 350
 #define MAX_SSID_LEN 32
 #define MAX_PASS_LEN 64
 #define MAX_URL_LEN 128
+#define MAX_TOKEN_LEN 512
 
 // Configuración BLE
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
@@ -36,7 +40,33 @@ bool deviceConnected = false;
 String currentSSID = "";
 String currentPassword = "";
 String currentBackendUrl = "";
+String currentToken = "";
 String esp32IP = "";
+
+String getBluetoothMac() {
+    uint8_t btMac[6];
+    esp_read_mac(btMac, ESP_MAC_BT);
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", btMac[0], btMac[1], btMac[2], btMac[3], btMac[4], btMac[5]);
+    return String(macStr);
+}
+
+String urlEncode(const String& value) {
+    const char* hex = "0123456789ABCDEF";
+    String encoded = "";
+    for (size_t i = 0; i < value.length(); i++) {
+        char c = value.charAt(i);
+        bool safe = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' || c == '~';
+        if (safe) {
+            encoded += c;
+        } else {
+            encoded += '%';
+            encoded += hex[(c >> 4) & 0x0F];
+            encoded += hex[c & 0x0F];
+        }
+    }
+    return encoded;
+}
 
 void startCameraServer();
 void setupLedFlash();
@@ -55,21 +85,24 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     }
 }
 
-void saveWiFiCredentials(String ssid, String password, String url) {
-    Serial.println("Guardando credenciales WiFi y URL...");
+void saveWiFiCredentials(String ssid, String password, String url, String token) {
+    Serial.println("Guardando credenciales WiFi, URL y Token...");
     for (int i = SSID_ADDR; i < SSID_ADDR + MAX_SSID_LEN; i++) EEPROM.write(i, 0);
     for (int i = PASS_ADDR; i < PASS_ADDR + MAX_PASS_LEN; i++) EEPROM.write(i, 0);
     for (int i = URL_ADDR; i < URL_ADDR + MAX_URL_LEN; i++) EEPROM.write(i, 0);
+    for (int i = TOKEN_ADDR; i < TOKEN_ADDR + MAX_TOKEN_LEN; i++) EEPROM.write(i, 0);
     
     for (int i = 0; i < ssid.length() && i < MAX_SSID_LEN; i++) EEPROM.write(SSID_ADDR + i, ssid[i]);
     for (int i = 0; i < password.length() && i < MAX_PASS_LEN; i++) EEPROM.write(PASS_ADDR + i, password[i]);
     for (int i = 0; i < url.length() && i < MAX_URL_LEN; i++) EEPROM.write(URL_ADDR + i, url[i]);
+    for (int i = 0; i < token.length() && i < MAX_TOKEN_LEN; i++) EEPROM.write(TOKEN_ADDR + i, token[i]);
     
     if (EEPROM.commit()) {
-        Serial.println("Credenciales y URL guardadas exitosamente");
+        Serial.println("Credenciales, URL y Token guardadas exitosamente");
         currentSSID = ssid;
         currentPassword = password;
         currentBackendUrl = url;
+        currentToken = token;
     } else {
         Serial.println("Error al guardar en EEPROM");
     }
@@ -79,6 +112,7 @@ void loadWiFiCredentials() {
     char ssid[MAX_SSID_LEN + 1] = {0};
     char password[MAX_PASS_LEN + 1] = {0};
     char url[MAX_URL_LEN + 1] = {0};
+    char token[MAX_TOKEN_LEN + 1] = {0};
     
     for (int i = 0; i < MAX_SSID_LEN; i++) ssid[i] = EEPROM.read(SSID_ADDR + i);
     ssid[MAX_SSID_LEN] = '\0';
@@ -86,10 +120,13 @@ void loadWiFiCredentials() {
     password[MAX_PASS_LEN] = '\0';
     for (int i = 0; i < MAX_URL_LEN; i++) url[i] = EEPROM.read(URL_ADDR + i);
     url[MAX_URL_LEN] = '\0';
+    for (int i = 0; i < MAX_TOKEN_LEN; i++) token[i] = EEPROM.read(TOKEN_ADDR + i);
+    token[MAX_TOKEN_LEN] = '\0';
     
     currentSSID = String(ssid);
     currentPassword = String(password);
     currentBackendUrl = String(url);
+    currentToken = String(token);
     
     if (currentSSID.length() > 0) {
         Serial.println("Credenciales WiFi cargadas: " + currentSSID);
@@ -114,20 +151,23 @@ class WifiConfigCallback: public BLECharacteristicCallbacks {
     void onWrite(BLECharacteristic *pCharacteristic) {
         String value = pCharacteristic->getValue().c_str();
         if (value.length() > 0) {
-            Serial.println("Datos de config recibidos: " + value);
+            Serial.println("Datos de config recibidos");
             int firstSep = value.indexOf('|');
             int secondSep = value.indexOf('|', firstSep + 1);
-            if (firstSep != -1 && secondSep != -1) {
+            int thirdSep = value.indexOf('|', secondSep + 1);
+            
+            if (firstSep != -1 && secondSep != -1 && thirdSep != -1) {
                 String ssid = value.substring(0, firstSep);
                 String password = value.substring(firstSep + 1, secondSep);
-                String url = value.substring(secondSep + 1);
-                saveWiFiCredentials(ssid, password, url);
+                String url = value.substring(secondSep + 1, thirdSep);
+                String token = value.substring(thirdSep + 1);
+                saveWiFiCredentials(ssid, password, url, token);
                 
                 Serial.println("Reiniciando ESP32 para aplicar configuración Wi-Fi y Backend...");
                 delay(1000);
                 ESP.restart();
             } else {
-                Serial.println("Formato incorrecto. Use SSID|PASSWORD|BACKEND_URL");
+                Serial.println("Formato incorrecto. Use SSID|PASSWORD|BACKEND_URL|TOKEN");
             }
         }
     }
@@ -277,8 +317,11 @@ void setup() {
           startCameraServer();
 
           if (currentBackendUrl.length() > 0) {
-              String macAddress = WiFi.macAddress();
-              String wsPath = "/ws?deviceKey=" + macAddress;
+              String macAddress = getBluetoothMac();
+              String wsPath = "/ws?deviceKey=" + urlEncode(macAddress);
+              if (currentToken.length() > 0) {
+                  wsPath += "&token=" + urlEncode(currentToken);
+              }
               
               bool isWss = currentBackendUrl.startsWith("wss://");
               String host = currentBackendUrl;

@@ -38,6 +38,7 @@ String currentToken = "";
 String esp32IP = "";
 bool shouldRestart = false;
 bool relayEncendido = false;
+bool simularDatos = true; // Cambiar a false para usar los sensores reales
 
 const int RELAY_PIN = 26;
 const int ACS712_PIN = 34;
@@ -96,6 +97,12 @@ String buildTelemetryPayload() {
 }
 
 void calibrarACS712() {
+    if (simularDatos) {
+        sensorCalibrado = true;
+        Serial.println("[Meter] ACS712 simulación calibrada.");
+        return;
+    }
+
     long suma = 0;
 
     for (int i = 0; i < 1000; i++) {
@@ -108,7 +115,23 @@ void calibrarACS712() {
     Serial.printf("[Meter] ACS712 calibrado. Base ADC: %.2f\n", baseAdc);
 }
 
+float simularInformacion() {
+    if (!simularDatos) return 0.0f;
+    
+    if (relayEncendido) {
+        // Simulamos una corriente fluctuante alrededor de 1.3A para que la potencia varíe
+        return 1.3f + (random(-10, 10) / 100.0f);
+    } else {
+        // Cuando está apagado mandamos un valor muy bajito para que veas que la simulación está activa
+        return 0.08f + (random(-2, 2) / 100.0f);
+    }
+}
+
 float getCorriente() {
+    if (simularDatos) {
+        return simularInformacion();
+    }
+
     if (!sensorCalibrado) {
         return 0.0f;
     }
@@ -150,6 +173,7 @@ void actualizarEnergia(float potencia) {
 void sendTelemetry() {
     if (WiFi.status() == WL_CONNECTED && webSocket.isConnected()) {
         String payload = buildTelemetryPayload();
+        Serial.println("[WebSocket] Enviando telemetría: " + payload);
         webSocket.sendTXT(payload);
     }
 }
@@ -185,6 +209,7 @@ String urlEncode(const String& value) {
 void sendCurrentState() {
     if (WiFi.status() == WL_CONNECTED) {
         String payload = buildStatusPayload();
+        Serial.println("[WebSocket] Enviando estado: " + payload);
         webSocket.sendTXT(payload);
     }
 }
