@@ -78,6 +78,13 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             break;
         case WStype_CONNECTED:
             Serial.printf("[WSc] Connected to url: %s\n", payload);
+            {
+                // Enviar la IP al backend para que la actualice
+                String ipStr = WiFi.localIP().toString();
+                String msg = "{\"action\":\"camera_ip\", \"ip\":\"" + ipStr + "\"}";
+                webSocket.sendTXT(msg);
+                Serial.println("Enviando IP al backend: " + ipStr);
+            }
             break;
         case WStype_TEXT:
             Serial.printf("[WSc] get text: %s\n", payload);
