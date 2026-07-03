@@ -39,9 +39,19 @@ String esp32IP = "";
 bool shouldRestart = false;
 bool relayEncendido = false;
 
-const int RELAY_PIN = 4;
+const int RELAY_PIN = 26;
+const int ACS712_PIN = 34;
 const int STATUS_LED_PIN = 2;
 const bool RELAY_ACTIVE_LOW = false;
+const float VOLTAJE_RED = 127.0f;
+const float SENSIBILIDAD_ACS712 = 0.185f;
+const unsigned long TELEMETRY_INTERVAL_MS = 30000;
+
+float baseAdc = 0;
+float energiaWh = 0;
+unsigned long lastEnergySampleMs = 0;
+unsigned long lastTelemetryMs = 0;
+bool sensorCalibrado = false;
 
 String getBluetoothMac() {
     uint8_t btMac[6];
@@ -52,12 +62,101 @@ String getBluetoothMac() {
 }
 
 String buildStatusPayload() {
+    float corriente = getCorriente();
+    float potencia = getPotencia(corriente);
+
     String payload = "{\"event\":\"state\",\"value\":";
     payload += relayEncendido ? "true" : "false";
     payload += ",\"estado\":\"";
-    payload += relayEncendido ? "BT_ON" : "BT_OFF";
-    payload += "\"}";
+    payload += relayEncendido ? "ON" : "OFF";
+    payload += "\",\"corriente\":";
+    payload += String(corriente, 3);
+    payload += ",\"potencia\":";
+    payload += String(potencia, 2);
+    payload += ",\"energia\":";
+    payload += String(energiaWh, 3);
+    payload += "}";
     return payload;
+}
+
+String buildTelemetryPayload() {
+    float corriente = getCorriente();
+    float potencia = getPotencia(corriente);
+
+    String payload = "{\"event\":\"telemetry\",\"corriente\":";
+    payload += String(corriente, 3);
+    payload += ",\"potencia\":";
+    payload += String(potencia, 2);
+    payload += ",\"energia\":";
+    payload += String(energiaWh, 3);
+    payload += ",\"estado\":";
+    payload += relayEncendido ? "true" : "false";
+    payload += "}";
+    return payload;
+}
+
+void calibrarACS712() {
+    long suma = 0;
+
+    for (int i = 0; i < 1000; i++) {
+        suma += analogRead(ACS712_PIN);
+        delay(2);
+    }
+
+    baseAdc = suma / 1000.0f;
+    sensorCalibrado = true;
+    Serial.printf("[Meter] ACS712 calibrado. Base ADC: %.2f\n", baseAdc);
+}
+
+float getCorriente() {
+    if (!sensorCalibrado) {
+        return 0.0f;
+    }
+
+    int adc = analogRead(ACS712_PIN);
+    float voltaje = (adc / 4095.0f) * 3.3f;
+    float voltajeBase = (baseAdc / 4095.0f) * 3.3f;
+    float corriente = (voltajeBase - voltaje) / SENSIBILIDAD_ACS712;
+    corriente = abs(corriente);
+
+    if (corriente < 0.05f || !relayEncendido) {
+        corriente = 0.0f;
+    }
+
+    return corriente;
+}
+
+float getPotencia(float corriente) {
+    return VOLTAJE_RED * corriente;
+}
+
+void actualizarEnergia(float potencia) {
+    unsigned long now = millis();
+
+    if (lastEnergySampleMs == 0) {
+        lastEnergySampleMs = now;
+        return;
+    }
+
+    float horas = (now - lastEnergySampleMs) / 3600000.0f;
+
+    if (relayEncendido) {
+        energiaWh += potencia * horas;
+    }
+
+    lastEnergySampleMs = now;
+}
+
+void sendTelemetry() {
+    if (WiFi.status() == WL_CONNECTED && webSocket.isConnected()) {
+        webSocket.sendTXT(buildTelemetryPayload());
+    }
+}
+
+void updateMetering() {
+    float corriente = getCorriente();
+    float potencia = getPotencia(corriente);
+    actualizarEnergia(potencia);
 }
 
 String urlEncode(const String& value) {
@@ -252,6 +351,7 @@ void setup() {
     Serial.setDebugOutput(true);
     pinMode(RELAY_PIN, OUTPUT);
     pinMode(STATUS_LED_PIN, OUTPUT);
+    pinMode(ACS712_PIN, INPUT);
     setPowerState(false);
     Serial.println();
     Serial.println("=== Iniciando Socket ESP32 (Manordomo) ===");
@@ -294,6 +394,8 @@ void setup() {
         if (WiFi.status() == WL_CONNECTED) {
             esp32IP = WiFi.localIP().toString();
             Serial.println("WiFi conectado");
+
+            calibrarACS712();
 
             // Intentar conectar al WebSocket
             if (currentBackendUrl.length() > 0) {
@@ -362,7 +464,18 @@ void loop() {
     }
 
     static unsigned long lastUpdate = 0;
+    static unsigned long lastMeterTick = 0;
     if (WiFi.status() == WL_CONNECTED) {
+        if (millis() - lastMeterTick >= 1000) {
+            updateMetering();
+            lastMeterTick = millis();
+        }
+
+        if (millis() - lastTelemetryMs >= TELEMETRY_INTERVAL_MS) {
+            sendTelemetry();
+            lastTelemetryMs = millis();
+        }
+
         if (millis() - lastUpdate > 5000) {
             esp32IP = WiFi.localIP().toString();
             if (deviceConnected && pIpCharacteristic != nullptr) {
