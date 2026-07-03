@@ -149,7 +149,8 @@ void actualizarEnergia(float potencia) {
 
 void sendTelemetry() {
     if (WiFi.status() == WL_CONNECTED && webSocket.isConnected()) {
-        webSocket.sendTXT(buildTelemetryPayload());
+        String payload = buildTelemetryPayload();
+        webSocket.sendTXT(payload);
     }
 }
 
@@ -394,6 +395,9 @@ void setup() {
         if (WiFi.status() == WL_CONNECTED) {
             esp32IP = WiFi.localIP().toString();
             Serial.println("WiFi conectado");
+
+            Serial.println("Iniciando BLE para permitir configuración mientras está conectado a WiFi...");
+            initBLE();
 
             calibrarACS712();
 
