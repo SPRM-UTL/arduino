@@ -210,8 +210,43 @@ void setup() {
       Serial.println("Error al inicializar EEPROM");
   }
   loadWiFiCredentials();
-  initBLE();
 
+  bool wifiConnected = false;
+
+  if (currentSSID.length() > 0) {
+      Serial.println("Conectando a Wi-Fi: " + currentSSID);
+      WiFi.begin(currentSSID.c_str(), currentPassword.c_str());
+      WiFi.setSleep(false);
+      
+      int attempts = 0;
+      while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+        delay(500);
+        Serial.print(".");
+        attempts++;
+      }
+      Serial.println();
+      
+      if (WiFi.status() == WL_CONNECTED) {
+          wifiConnected = true;
+          esp32IP = WiFi.localIP().toString();
+          Serial.println("WiFi connected");
+          Serial.print("Camera Ready! Use 'http://");
+          Serial.print(esp32IP);
+          Serial.println("' to connect");
+      } else {
+          Serial.println("Fallo al conectar a Wi-Fi.");
+          WiFi.disconnect(true);
+      }
+  }
+
+  if (!wifiConnected) {
+      Serial.println("Iniciando modo de configuración BLE...");
+      initBLE();
+      // No inicializamos la cámara si entramos a modo BLE para ahorrar memoria.
+      return; 
+  }
+
+  // Si llegamos aquí, Wi-Fi conectó correctamente, procedemos a iniciar la cámara
   camera_config_t config;
   config.ledc_channel = LEDC_CHANNEL_0;
   config.ledc_timer = LEDC_TIMER_0;
@@ -289,85 +324,45 @@ void setup() {
   setupLedFlash();
 #endif
 
-  if (currentSSID.length() > 0) {
-      Serial.println("Conectando a Wi-Fi: " + currentSSID);
-      WiFi.begin(currentSSID.c_str(), currentPassword.c_str());
-      WiFi.setSleep(false);
-      
-      int attempts = 0;
-      while (WiFi.status() != WL_CONNECTED && attempts < 40) {
-        delay(500);
-        Serial.print(".");
-        attempts++;
+  startCameraServer();
+
+  if (currentBackendUrl.length() > 0) {
+      String macAddress = getBluetoothMac();
+      String wsPath = "/ws?deviceKey=" + urlEncode(macAddress);
+      if (currentToken.length() > 0) {
+          wsPath += "&token=" + urlEncode(currentToken);
       }
-      Serial.println();
+      wsPath += "&tipoAparato=" + urlEncode("Cámara");
       
-      if (WiFi.status() == WL_CONNECTED) {
-          esp32IP = WiFi.localIP().toString();
-          Serial.println("WiFi connected");
-          Serial.print("Camera Ready! Use 'http://");
-          Serial.print(esp32IP);
-          Serial.println("' to connect");
-          
-          if (pIpCharacteristic != nullptr) {
-              pIpCharacteristic->setValue(esp32IP.c_str());
-              pIpCharacteristic->notify();
-          }
-
-          startCameraServer();
-
-          if (currentBackendUrl.length() > 0) {
-              String macAddress = getBluetoothMac();
-              String wsPath = "/ws?deviceKey=" + urlEncode(macAddress);
-              if (currentToken.length() > 0) {
-                  wsPath += "&token=" + urlEncode(currentToken);
-              }
-              
-              bool isWss = currentBackendUrl.startsWith("wss://");
-              String host = currentBackendUrl;
-              if (isWss) host.replace("wss://", "");
-              else host.replace("ws://", "");
-              
-              int slashIndex = host.indexOf('/');
-              if (slashIndex != -1) host = host.substring(0, slashIndex);
-              
-              int port = isWss ? 443 : 80;
-              int colonIndex = host.indexOf(':');
-              if (colonIndex != -1) {
-                  port = host.substring(colonIndex + 1).toInt();
-                  host = host.substring(0, colonIndex);
-              }
-              
-              Serial.println("Conectando a WS Host: " + host + " Port: " + String(port) + " Path: " + wsPath);
-              if (isWss) {
-                  webSocket.beginSSL(host, port, wsPath);
-              } else {
-                  webSocket.begin(host, port, wsPath);
-              }
-              webSocket.onEvent(webSocketEvent);
-              webSocket.setReconnectInterval(5000);
-              // Send ping every 10 seconds to keep connection alive
-              webSocket.enableHeartbeat(10000, 3000, 2);
-          }
+      bool isWss = currentBackendUrl.startsWith("wss://");
+      String host = currentBackendUrl;
+      if (isWss) host.replace("wss://", "");
+      else host.replace("ws://", "");
+      
+      int slashIndex = host.indexOf('/');
+      if (slashIndex != -1) host = host.substring(0, slashIndex);
+      
+      int port = isWss ? 443 : 80;
+      int colonIndex = host.indexOf(':');
+      if (colonIndex != -1) {
+          port = host.substring(colonIndex + 1).toInt();
+          host = host.substring(0, colonIndex);
+      }
+      
+      Serial.println("Conectando a WS Host: " + host + " Port: " + String(port) + " Path: " + wsPath);
+      if (isWss) {
+          webSocket.beginSSL(host, port, wsPath);
       } else {
-          Serial.println("Error al conectar a WiFi, esperando configuración por Bluetooth...");
+          webSocket.begin(host, port, wsPath);
       }
-  } else {
-      Serial.println("No hay configuración Wi-Fi guardada, esperando configuración por Bluetooth...");
+      webSocket.onEvent(webSocketEvent);
+      webSocket.setReconnectInterval(5000);
+      webSocket.enableHeartbeat(10000, 3000, 2);
   }
 }
 
 void loop() {
-  static unsigned long lastUpdate = 0;
   if (WiFi.status() == WL_CONNECTED) {
-      if (millis() - lastUpdate > 5000) {
-          esp32IP = WiFi.localIP().toString();
-          if (deviceConnected && pIpCharacteristic != nullptr) {
-              pIpCharacteristic->setValue(esp32IP.c_str());
-              pIpCharacteristic->notify();
-          }
-          lastUpdate = millis();
-      }
       webSocket.loop();
   }
   delay(10);
