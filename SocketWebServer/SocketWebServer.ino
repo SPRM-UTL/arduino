@@ -37,6 +37,65 @@ String currentBackendUrl = "";
 String currentToken = "";
 String esp32IP = "";
 bool shouldRestart = false;
+bool relayEncendido = false;
+
+const int RELAY_PIN = 4;
+const int STATUS_LED_PIN = 2;
+const bool RELAY_ACTIVE_LOW = false;
+
+String getBluetoothMac() {
+    uint8_t btMac[6];
+    esp_read_mac(btMac, ESP_MAC_BT);
+    char macStr[18];
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", btMac[0], btMac[1], btMac[2], btMac[3], btMac[4], btMac[5]);
+    return String(macStr);
+}
+
+String buildStatusPayload() {
+    String payload = "{\"event\":\"state\",\"value\":";
+    payload += relayEncendido ? "true" : "false";
+    payload += ",\"estado\":\"";
+    payload += relayEncendido ? "BT_ON" : "BT_OFF";
+    payload += "\"}";
+    return payload;
+}
+
+String urlEncode(const String& value) {
+    const char* hex = "0123456789ABCDEF";
+    String encoded = "";
+    for (size_t i = 0; i < value.length(); i++) {
+        char c = value.charAt(i);
+        bool safe =
+            (c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~';
+
+        if (safe) {
+            encoded += c;
+        } else {
+            encoded += '%';
+            encoded += hex[(c >> 4) & 0x0F];
+            encoded += hex[c & 0x0F];
+        }
+    }
+    return encoded;
+}
+
+void sendCurrentState() {
+    if (WiFi.status() == WL_CONNECTED) {
+        String payload = buildStatusPayload();
+        webSocket.sendTXT(payload);
+    }
+}
+
+void setPowerState(bool encendido) {
+    relayEncendido = encendido;
+    digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? !encendido : encendido);
+    digitalWrite(STATUS_LED_PIN, encendido ? HIGH : LOW);
+    Serial.println(encendido ? "--- COMANDO: ENCENDER ---" : "--- COMANDO: APAGAR ---");
+    sendCurrentState();
+}
 
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
@@ -45,16 +104,17 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             break;
         case WStype_CONNECTED:
             Serial.printf("[WSc] Conectado a la url: %s\n", payload);
+            sendCurrentState();
             break;
         case WStype_TEXT: {
             String text = String((char*)payload);
             text.trim();
             Serial.printf("[WSc] Comando recibido: '%s'\n", text.c_str());
             
-            if (text == "ON") {
-                Serial.println("--- COMANDO: ENCENDER ---");
-            } else if (text == "OFF") {
-                Serial.println("--- COMANDO: APAGAR ---");
+            if (text == "ON" || text == "LED_ON" || text == "FAN_ON") {
+                setPowerState(true);
+            } else if (text == "OFF" || text == "LED_OFF" || text == "FAN_OFF") {
+                setPowerState(false);
             } else {
                 Serial.printf("[WSc] Comando desconocido: '%s'\n", text.c_str());
             }
@@ -144,6 +204,11 @@ class WifiConfigCallback: public BLECharacteristicCallbacks {
                 String url = value.substring(secondSep + 1, thirdSep);
                 String token = value.substring(thirdSep + 1);
                 saveWiFiCredentials(ssid, password, url, token);
+                if (deviceConnected && pIpCharacteristic != nullptr) {
+                    String estadoBle = "0.0.0.0|" + getBluetoothMac();
+                    pIpCharacteristic->setValue(estadoBle.c_str());
+                    pIpCharacteristic->notify();
+                }
                 
                 Serial.println("Configuración recibida, reiniciando pronto...");
                 shouldRestart = true;
@@ -185,6 +250,9 @@ void initBLE() {
 void setup() {
     Serial.begin(115200);
     Serial.setDebugOutput(true);
+    pinMode(RELAY_PIN, OUTPUT);
+    pinMode(STATUS_LED_PIN, OUTPUT);
+    setPowerState(false);
     Serial.println();
     Serial.println("=== Iniciando Socket ESP32 (Manordomo) ===");
 
@@ -229,15 +297,11 @@ void setup() {
 
             // Intentar conectar al WebSocket
             if (currentBackendUrl.length() > 0) {
-                uint8_t btMac[6];
-                esp_read_mac(btMac, ESP_MAC_BT);
-                char macStr[18];
-                snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", btMac[0], btMac[1], btMac[2], btMac[3], btMac[4], btMac[5]);
-                String macAddress = String(macStr);
+                String macAddress = getBluetoothMac();
                 
-                String wsPath = "/ws?deviceKey=" + macAddress;
+                String wsPath = "/ws?deviceKey=" + urlEncode(macAddress);
                 if (currentToken.length() > 0) {
-                    wsPath += "&token=" + currentToken;
+                    wsPath += "&token=" + urlEncode(currentToken);
                 }
                 Serial.println("[DEBUG] MAC BT Leída: " + macAddress);
                 Serial.println("[DEBUG] Intentando WebSocket WS Path: " + wsPath);
@@ -257,6 +321,10 @@ void setup() {
                     port = host.substring(colonIndex + 1).toInt();
                     host = host.substring(0, colonIndex);
                 }
+
+                Serial.println("[DEBUG] WS Host: " + host);
+                Serial.println("[DEBUG] WS Port: " + String(port));
+                Serial.println("[DEBUG] WS SSL: " + String(isWss ? "true" : "false"));
                 
                 if (isWss) {
                     webSocket.beginSSL(host, port, wsPath);
@@ -298,7 +366,8 @@ void loop() {
         if (millis() - lastUpdate > 5000) {
             esp32IP = WiFi.localIP().toString();
             if (deviceConnected && pIpCharacteristic != nullptr) {
-                pIpCharacteristic->setValue(esp32IP.c_str());
+                String estadoBle = esp32IP + "|" + getBluetoothMac();
+                pIpCharacteristic->setValue(estadoBle.c_str());
                 pIpCharacteristic->notify();
             }
             lastUpdate = millis();
