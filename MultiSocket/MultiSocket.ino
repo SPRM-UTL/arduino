@@ -37,10 +37,10 @@ String currentBackendUrl = "";
 String currentToken = "";
 String esp32IP = "";
 bool shouldRestart = false;
-bool relayEncendido = false;
-bool simularDatos = false; // Cambiar a false para usar los sensores reales
 
-const int RELAY_PIN = 26;
+// 4 Relays for MultiSocket
+bool relayEncendido[4] = {false, false, false, false};
+const int RELE_PINS[4] = {26, 25, 33, 32};
 const int ACS712_PIN = 34;
 const int STATUS_LED_PIN = 2;
 const bool RELAY_ACTIVE_LOW = false;
@@ -53,6 +53,7 @@ float energiaWh = 0;
 unsigned long lastEnergySampleMs = 0;
 unsigned long lastTelemetryMs = 0;
 bool sensorCalibrado = false;
+bool simularDatos = true; 
 
 String getBluetoothMac() {
     uint8_t btMac[6];
@@ -66,11 +67,12 @@ String buildStatusPayload() {
     float corriente = getCorriente();
     float potencia = getPotencia(corriente);
 
-    String payload = "{\"event\":\"state\",\"value\":";
-    payload += relayEncendido ? "true" : "false";
-    payload += ",\"estado\":\"";
-    payload += relayEncendido ? "ON" : "OFF";
-    payload += "\",\"corriente\":";
+    String payload = "{\"event\":\"state\"";
+    payload += ",\"estado1\":" + String(relayEncendido[0] ? "true" : "false");
+    payload += ",\"estado2\":" + String(relayEncendido[1] ? "true" : "false");
+    payload += ",\"estado3\":" + String(relayEncendido[2] ? "true" : "false");
+    payload += ",\"estado4\":" + String(relayEncendido[3] ? "true" : "false");
+    payload += ",\"corriente\":";
     payload += String(corriente, 3);
     payload += ",\"potencia\":";
     payload += String(potencia, 2);
@@ -90,8 +92,10 @@ String buildTelemetryPayload() {
     payload += String(potencia, 2);
     payload += ",\"energia\":";
     payload += String(energiaWh, 3);
-    payload += ",\"estado\":";
-    payload += relayEncendido ? "true" : "false";
+    payload += ",\"estado1\":" + String(relayEncendido[0] ? "true" : "false");
+    payload += ",\"estado2\":" + String(relayEncendido[1] ? "true" : "false");
+    payload += ",\"estado3\":" + String(relayEncendido[2] ? "true" : "false");
+    payload += ",\"estado4\":" + String(relayEncendido[3] ? "true" : "false");
     payload += "}";
     return payload;
 }
@@ -118,7 +122,7 @@ void calibrarACS712() {
 float simularInformacion() {
     if (!simularDatos) return 0.0f;
     
-    if (relayEncendido) {
+    if (relayEncendido[0] || relayEncendido[1] || relayEncendido[2] || relayEncendido[3]) {
         // Simulamos una corriente fluctuante alrededor de 1.3A para que la potencia varíe
         return 1.3f + (random(-10, 10) / 100.0f);
     } else {
@@ -142,7 +146,8 @@ float getCorriente() {
     float corriente = (voltajeBase - voltaje) / SENSIBILIDAD_ACS712;
     corriente = abs(corriente);
 
-    if (corriente < 0.05f || !relayEncendido) {
+    bool anyOn = relayEncendido[0] || relayEncendido[1] || relayEncendido[2] || relayEncendido[3];
+    if (corriente < 0.05f || !anyOn) {
         corriente = 0.0f;
     }
 
@@ -163,7 +168,8 @@ void actualizarEnergia(float potencia) {
 
     float horas = (now - lastEnergySampleMs) / 3600000.0f;
 
-    if (relayEncendido) {
+    bool anyOn = relayEncendido[0] || relayEncendido[1] || relayEncendido[2] || relayEncendido[3];
+    if (anyOn) {
         energiaWh += potencia * horas;
     }
 
@@ -214,12 +220,17 @@ void sendCurrentState() {
     }
 }
 
-void setPowerState(bool encendido) {
-    relayEncendido = encendido;
-    digitalWrite(RELAY_PIN, RELAY_ACTIVE_LOW ? !encendido : encendido);
-    digitalWrite(STATUS_LED_PIN, encendido ? HIGH : LOW);
-    Serial.println(encendido ? "--- COMANDO: ENCENDER ---" : "--- COMANDO: APAGAR ---");
-    sendCurrentState();
+void setPowerState(int index, bool encendido) {
+    if (index >= 0 && index < 4) {
+        relayEncendido[index] = encendido;
+        digitalWrite(RELE_PINS[index], RELAY_ACTIVE_LOW ? !encendido : encendido);
+        Serial.printf("--- COMANDO: %s CONTACTO %d ---\n", encendido ? "ENCENDER" : "APAGAR", index + 1);
+        
+        bool anyOn = relayEncendido[0] || relayEncendido[1] || relayEncendido[2] || relayEncendido[3];
+        digitalWrite(STATUS_LED_PIN, anyOn ? HIGH : LOW);
+        
+        sendCurrentState();
+    }
 }
 
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
@@ -236,11 +247,18 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             text.trim();
             Serial.printf("[WSc] Comando recibido: '%s'\n", text.c_str());
             
-            if (text == "ON" || text == "LED_ON" || text == "FAN_ON") {
-                setPowerState(true);
-            } else if (text == "OFF" || text == "LED_OFF" || text == "FAN_OFF") {
-                setPowerState(false);
-            } else {
+            if (text == "ON1") setPowerState(0, true);
+            else if (text == "OFF1") setPowerState(0, false);
+            else if (text == "ON2") setPowerState(1, true);
+            else if (text == "OFF2") setPowerState(1, false);
+            else if (text == "ON3") setPowerState(2, true);
+            else if (text == "OFF3") setPowerState(2, false);
+            else if (text == "ON4") setPowerState(3, true);
+            else if (text == "OFF4") setPowerState(3, false);
+            // Compatibilidad hacia atrás (por defecto controla el 1)
+            else if (text == "ON" || text == "LED_ON" || text == "FAN_ON") setPowerState(0, true);
+            else if (text == "OFF" || text == "LED_OFF" || text == "FAN_OFF") setPowerState(0, false);
+            else {
                 Serial.printf("[WSc] Comando desconocido: '%s'\n", text.c_str());
             }
             break;
@@ -345,7 +363,7 @@ class WifiConfigCallback: public BLECharacteristicCallbacks {
 };
 
 void initBLE() {
-    BLEDevice::init("ESP32_Socket_Manordomo");
+    BLEDevice::init("ESP32_MultiSocket_Manordomo");
     BLEServer *pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
     BLEService *pService = pServer->createService(SERVICE_UUID);
@@ -369,26 +387,27 @@ void initBLE() {
     pAdvertising->setMinPreferred(0x06);
     pAdvertising->setMinPreferred(0x12);
     BLEDevice::startAdvertising();
-    Serial.println("BLE iniciado (Socket ESP32), esperando conexiones...");
+    Serial.println("BLE iniciado (MultiSocket ESP32), esperando conexiones...");
 }
 
 void setup() {
     Serial.begin(115200);
     Serial.setDebugOutput(true);
-    pinMode(RELAY_PIN, OUTPUT);
+    
+    for(int i = 0; i < 4; i++) {
+        pinMode(RELE_PINS[i], OUTPUT);
+        digitalWrite(RELE_PINS[i], RELAY_ACTIVE_LOW ? HIGH : LOW);
+    }
     pinMode(STATUS_LED_PIN, OUTPUT);
+    digitalWrite(STATUS_LED_PIN, LOW);
+    
     pinMode(ACS712_PIN, INPUT);
-    setPowerState(false);
     Serial.println();
-    Serial.println("=== Iniciando Socket ESP32 (Manordomo) ===");
+    Serial.println("=== Iniciando MultiSocket ESP32 (Manordomo) ===");
 
     if (!EEPROM.begin(EEPROM_SIZE)) {
         Serial.println("Error al inicializar EEPROM");
     }
-
-    // Descomentar estas lineas para borrar la memoria
-    //for (int i = 0; i < 512; i++) EEPROM.write(i, 0);
-    //EEPROM.commit();
 
     loadWiFiCredentials();
 
@@ -398,17 +417,12 @@ void setup() {
         
         Serial.println("Conectando a Wi-Fi: [" + currentSSID + "]");
         
-        Serial.println("[DEBUG] Iniciando stack de Wi-Fi...");
         WiFi.mode(WIFI_STA);
         delay(100);
         
-        Serial.println("[DEBUG] Ejecutando WiFi.begin()...");
         WiFi.begin(currentSSID.c_str(), currentPassword.c_str());
-        
-        Serial.println("[DEBUG] WiFi.begin() completado. Desactivando Sleep...");
         WiFi.setSleep(false);
         
-        Serial.println("[DEBUG] Entrando al bucle de espera...");
         int attempts = 0;
         while (WiFi.status() != WL_CONNECTED && attempts < 40) {
             delay(500);
@@ -420,13 +434,9 @@ void setup() {
         if (WiFi.status() == WL_CONNECTED) {
             esp32IP = WiFi.localIP().toString();
             Serial.println("WiFi conectado");
-
-            Serial.println("Iniciando BLE para permitir configuración mientras está conectado a WiFi...");
             initBLE();
-
             calibrarACS712();
 
-            // Intentar conectar al WebSocket
             if (currentBackendUrl.length() > 0) {
                 String macAddress = getBluetoothMac();
                 
@@ -434,9 +444,6 @@ void setup() {
                 if (currentToken.length() > 0) {
                     wsPath += "&token=" + urlEncode(currentToken);
                 }
-                Serial.println("[DEBUG] MAC BT Leída: " + macAddress);
-                Serial.println("[DEBUG] Intentando WebSocket WS Path: " + wsPath);
-
                 
                 bool isWss = currentBackendUrl.startsWith("wss://");
                 String host = currentBackendUrl;
@@ -452,10 +459,6 @@ void setup() {
                     port = host.substring(colonIndex + 1).toInt();
                     host = host.substring(0, colonIndex);
                 }
-
-                Serial.println("[DEBUG] WS Host: " + host);
-                Serial.println("[DEBUG] WS Port: " + String(port));
-                Serial.println("[DEBUG] WS SSL: " + String(isWss ? "true" : "false"));
                 
                 if (isWss) {
                     webSocket.beginSSL(host, port, wsPath);
@@ -464,24 +467,18 @@ void setup() {
                 }
                 webSocket.onEvent(webSocketEvent);
                 webSocket.setReconnectInterval(5000);
-                // Aumentamos los tiempos del heartbeat para evitar desconexiones por latencia
                 webSocket.enableHeartbeat(15000, 10000, 2);
             }
                         
         } else {
             Serial.println("Error al conectar a WiFi. Apagando antena Wi-Fi...");
-            
-            // Apagamos la antena WiFi para liberar toda su memoria
             WiFi.disconnect(true, true);
             WiFi.mode(WIFI_OFF);
             delay(500);
-            
-            Serial.println("Iniciando BLE de rescate...");
             initBLE();
         }
     } else {
         Serial.println("No hay configuración Wi-Fi guardada.");
-        Serial.println("Iniciando BLE para configuración inicial...");
         initBLE();
     }
 }
