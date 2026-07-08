@@ -291,10 +291,17 @@ void loadWiFiCredentials() {
     for (int i = 0; i < MAX_TOKEN_LEN; i++) token[i] = EEPROM.read(TOKEN_ADDR + i);
     token[MAX_TOKEN_LEN] = '\0';
     
-    currentSSID = String(ssid);
-    currentPassword = String(password);
-    currentBackendUrl = String(url);
-    currentToken = String(token);
+    if (ssid[0] == 0 || ssid[0] == '\xFF') {
+        currentSSID = "";
+        currentPassword = "";
+        currentBackendUrl = "";
+        currentToken = "";
+    } else {
+        currentSSID = String(ssid);
+        currentPassword = String(password);
+        currentBackendUrl = String(url);
+        currentToken = String(token);
+    }
     
     if (currentSSID.length() > 0) {
         Serial.println("Credenciales WiFi cargadas: " + currentSSID);
@@ -345,7 +352,7 @@ class WifiConfigCallback: public BLECharacteristicCallbacks {
 };
 
 void initBLE() {
-    BLEDevice::init("ESP32_Socket_Manordomo");
+    BLEDevice::init("ESP32_Socket");
     BLEServer *pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
     BLEService *pService = pServer->createService(SERVICE_UUID);
