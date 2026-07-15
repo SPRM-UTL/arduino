@@ -247,14 +247,14 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             text.trim();
             Serial.printf("[WSc] Comando recibido: '%s'\n", text.c_str());
             
-            if (text == "ON1") setPowerState(0, true);
-            else if (text == "OFF1") setPowerState(0, false);
-            else if (text == "ON2") setPowerState(1, true);
-            else if (text == "OFF2") setPowerState(1, false);
-            else if (text == "ON3") setPowerState(2, true);
-            else if (text == "OFF3") setPowerState(2, false);
-            else if (text == "ON4") setPowerState(3, true);
-            else if (text == "OFF4") setPowerState(3, false);
+            if (text == "C1_ON" || text == "ON1") setPowerState(0, true);
+            else if (text == "C1_OFF" || text == "OFF1") setPowerState(0, false);
+            else if (text == "C2_ON" || text == "ON2") setPowerState(1, true);
+            else if (text == "C2_OFF" || text == "OFF2") setPowerState(1, false);
+            else if (text == "C3_ON" || text == "ON3") setPowerState(2, true);
+            else if (text == "C3_OFF" || text == "OFF3") setPowerState(2, false);
+            else if (text == "C4_ON" || text == "ON4") setPowerState(3, true);
+            else if (text == "C4_OFF" || text == "OFF4") setPowerState(3, false);
             // Compatibilidad hacia atrás (por defecto controla el 1)
             else if (text == "ON" || text == "LED_ON" || text == "FAN_ON") setPowerState(0, true);
             else if (text == "OFF" || text == "LED_OFF" || text == "FAN_OFF") setPowerState(0, false);

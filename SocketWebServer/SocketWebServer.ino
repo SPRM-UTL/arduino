@@ -352,7 +352,7 @@ class WifiConfigCallback: public BLECharacteristicCallbacks {
 };
 
 void initBLE() {
-    BLEDevice::init("ESP32_Socket");
+    BLEDevice::init("ESP32_Socket_Ventilador");
     BLEServer *pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
     BLEService *pService = pServer->createService(SERVICE_UUID);
