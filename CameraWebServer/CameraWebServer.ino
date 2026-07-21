@@ -300,7 +300,7 @@ void setup() {
   config.pin_sccb_scl = SIOC_GPIO_NUM;
   config.pin_pwdn = PWDN_GPIO_NUM;
   config.pin_reset = RESET_GPIO_NUM;
-  config.xclk_freq_hz = 20000000;
+  config.xclk_freq_hz = 10000000; // Bajado de 20MHz a 10MHz para estabilidad y menos calentamiento
   config.frame_size = FRAMESIZE_UXGA;
   config.pixel_format = PIXFORMAT_JPEG;
   config.grab_mode = CAMERA_GRAB_WHEN_EMPTY;
@@ -344,6 +344,11 @@ void setup() {
   if (config.pixel_format == PIXFORMAT_JPEG) {
     s->set_framesize(s, FRAMESIZE_QVGA);
   }
+  
+  // Forzar ajustes automáticos de luz para evitar que se ponga blanco
+  s->set_exposure_ctrl(s, 1); // Auto exposición
+  s->set_awb_gain(s, 1);      // Auto balance de blancos
+  s->set_gain_ctrl(s, 1);     // Auto ganancia
 
 #if defined(CAMERA_MODEL_M5STACK_WIDE) || defined(CAMERA_MODEL_M5STACK_ESP32CAM)
   s->set_vflip(s, 1);
