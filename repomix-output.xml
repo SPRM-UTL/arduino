@@ -3263,6 +3263,92 @@ void loop() {
 }
 </file>
 
+<file path="README.md">
+# ⚙️ Proyecto ESP32: Sincronización BLE y WebSockets
+
+Este repositorio contiene el firmware para placas ESP32 enfocado en dos funcionalidades principales de conectividad:
+1. **Configuración de credenciales de red** de manera dinámica mediante Bluetooth Low Energy (BLE) y Servidor Web Local.
+2. **Comunicación bidireccional en tiempo real** utilizando WebSockets a través de internet de manera segura (WSS).
+
+---
+
+## 🛠️ Requisitos Previos e Instalación
+
+Para poder compilar y cargar estos códigos en tu ESP32, asegúrate de cumplir con lo siguiente:
+
+### 1. Descargar e Instalar Arduino IDE
+* Descarga la última versión de **Arduino IDE** desde el [sitio oficial](https://www.arduino.cc/en/software).
+
+### 2. Configurar el soporte para ESP32
+Si aún no tienes las tarjetas ESP32 instaladas en tu IDE:
+1. Abre Arduino IDE y ve a **Archivo > Preferencias**.
+2. En el campo **Gestor de URLs Adicionales de Tarjetas**, agrega la siguiente URL:
+   ```text
+   [https://espressif.github.io/arduino-esp32/package_esp32_index.json](https://espressif.github.io/arduino-esp32/package_esp32_index.json)
+   ```
+3. Ve a Herramientas > Placa > Gestor de tarjetas..., busca esp32 por Espressif Systems e instálalo.
+3. Instalar Librerías Requeridas
+El archivo Soccket.ino requiere una librería externa para el manejo de WebSockets.
+
+Ve a Herramientas > Administrar bibliotecas...
+
+Busca WebSockets (desarrollada por Markus Sattler).
+
+Instala la versión más reciente.
+
+📂 Cómo Abrir los Proyectos
+Descarga o clona este repositorio en tu computadora.
+
+Navega hasta la carpeta del firmware que deseas probar:
+
+Para la configuración WiFi dinámica: abre la carpeta SincronizacionBluetooth y haz doble clic en SincronizacionBluetooth.ino.
+
+Para la comunicación en tiempo real: abre la carpeta Soccket y haz doble clic en Soccket.ino.
+
+En Arduino IDE, selecciona tu placa en Herramientas > Placa > esp32 > ESP32 Dev Module (o el modelo exacto que utilices) y el puerto COM correcto en Herramientas > Puerto.
+
+💻 Guía de Uso de los Códigos
+1. Sincronización WiFi por BLE y Web (SincronizacionBluetooth.ino)
+Este script permite inicializar el ESP32 sin credenciales fijas en el código. Permite configurarlo desde una app móvil por Bluetooth o desde un navegador web.
+
+Hardware Opcional (Indicadores LED):
+
+Pin 2: LED indicador de modo configuración / Conexión BLE.
+
+Pin 4: LED indicador de estado de la conexión WiFi (parpadea al conectar, fijo al tener éxito).
+
+¿Cómo usarlo?
+Modo BLE: Al encenderse, el ESP32 comenzará a emitir una señal Bluetooth con el nombre ESP32_Config.
+
+Usando una app de terminal BLE (como nRF Connect o Serial Bluetooth Terminal), conéctate al dispositivo.
+
+Envía las credenciales de tu red WiFi a la característica correspondiente (WIFI_CHAR_UUID) utilizando estrictamente el formato: TuSSID|TuContraseña.
+
+El ESP32 guardará estos datos en su memoria EEPROM (para no perderlos al apagarse) e intentará conectarse.
+
+Modo Web: Una vez conectado a la red, obtendrá una IP. Si entras a esa dirección IP desde el navegador de tu computadora o celular (ej. http://192.168.1.X), verás un panel visual para monitorear el estado de la señal, la red o cambiar las credenciales de manera gráfica.
+
+2. Cliente WebSockets (Soccket.ino)
+Este script sirve para conectar el ESP32 a un servidor en la nube (por defecto configurado en Render) y enviar/recibir mensajes de texto en tiempo real de manera bidireccional.
+
+Configuración previa en el código:
+Antes de cargarlo, debes editar las siguientes constantes al inicio del archivo según tu entorno:
+
+C++
+const char* WIFI_SSID = "Tu_Red_WiFi";       // Nombre de tu red de pruebas
+const char* WIFI_PASSWORD = "Tu_Contraseña"; // Contraseña de tu red
+const char* DEVICE_KEY = "esp32-b";          // Identificador único de este dispositivo
+const char* TARGET_DEVICE_KEY = "esp32-a";   // Dispositivo destino al que deseas comunicarte
+¿Cómo usarlo?
+Carga el código al ESP32 y abre el Monitor Serie (115200 baudios).
+
+El dispositivo se conectará automáticamente a la red WiFi configurada y establecerá un canal seguro wss://pruebasocket.onrender.com/ws usando SSL.
+
+Para Recibir: Cualquier mensaje enviado desde el servidor o desde el TARGET_DEVICE_KEY se imprimirá automáticamente en tu Monitor Serie bajo el tag [WS] Mensaje recibido:.
+
+Para Enviar: Escribe cualquier texto directamente en la barra de texto superior del Monitor Serie del Arduino IDE y presiona Enter. El ESP32 leerá esa entrada y la enviará de inmediato al servidor WebSocket.
+</file>
+
 <file path="MultiSocket/MultiSocket.ino">
 #include <Arduino.h>
 #include <WiFi.h>
@@ -3278,6 +3364,33 @@ void loop() {
 
 WebSocketsClient webSocket;
 
+// Certificado Let's Encrypt ISRG Root X1 (Usado por Render y la mayoría de servicios web)
+const char* rootCACertificate = \
+"-----BEGIN CERTIFICATE-----\n" \
+"MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n" \
+"TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n" \
+"cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\n" \
+"WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\n" \
+"ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\n" \
+"MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc\n" \
+"h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+\n" \
+"0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U\n" \
+"A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW\n" \
+"T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH\n" \
+"B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC\n" \
+"B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv\n" \
+"KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn\n" \
+"OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn\n" \
+"jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw\n" \
+"qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI\n" \
+"rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV\n" \
+"HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq\n" \
+"hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL\n" \
+"ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ\n" \
+"3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK\n" \
+"NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5\n" \
+"ORAzI4JMPJ+GslWYHb4phow\n" \
+"-----END CERTIFICATE-----\n";
 // Configuración EEPROM
 #define EEPROM_SIZE 1024
 #define SSID_ADDR 0
@@ -3707,7 +3820,6 @@ void setup() {
         if (WiFi.status() == WL_CONNECTED) {
             esp32IP = WiFi.localIP().toString();
             Serial.println("WiFi conectado");
-            initBLE();
             calibrarACS712();
 
             if (currentBackendUrl.length() > 0) {
@@ -3734,10 +3846,12 @@ void setup() {
                 }
                 
                 if (isWss) {
-                    webSocket.beginSSL(host, port, wsPath);
+                    // Usamos beginSSL con protocolo vacío ("") para evitar rechazos
+                    webSocket.beginSSL(host.c_str(), port, wsPath.c_str(), "", "");
                 } else {
-                    webSocket.begin(host, port, wsPath);
+                    webSocket.begin(host.c_str(), port, wsPath.c_str(), "");
                 }
+                
                 webSocket.onEvent(webSocketEvent);
                 webSocket.setReconnectInterval(5000);
                 webSocket.enableHeartbeat(15000, 10000, 2);
@@ -3790,92 +3904,6 @@ void loop() {
 }
 </file>
 
-<file path="README.md">
-# ⚙️ Proyecto ESP32: Sincronización BLE y WebSockets
-
-Este repositorio contiene el firmware para placas ESP32 enfocado en dos funcionalidades principales de conectividad:
-1. **Configuración de credenciales de red** de manera dinámica mediante Bluetooth Low Energy (BLE) y Servidor Web Local.
-2. **Comunicación bidireccional en tiempo real** utilizando WebSockets a través de internet de manera segura (WSS).
-
----
-
-## 🛠️ Requisitos Previos e Instalación
-
-Para poder compilar y cargar estos códigos en tu ESP32, asegúrate de cumplir con lo siguiente:
-
-### 1. Descargar e Instalar Arduino IDE
-* Descarga la última versión de **Arduino IDE** desde el [sitio oficial](https://www.arduino.cc/en/software).
-
-### 2. Configurar el soporte para ESP32
-Si aún no tienes las tarjetas ESP32 instaladas en tu IDE:
-1. Abre Arduino IDE y ve a **Archivo > Preferencias**.
-2. En el campo **Gestor de URLs Adicionales de Tarjetas**, agrega la siguiente URL:
-   ```text
-   [https://espressif.github.io/arduino-esp32/package_esp32_index.json](https://espressif.github.io/arduino-esp32/package_esp32_index.json)
-   ```
-3. Ve a Herramientas > Placa > Gestor de tarjetas..., busca esp32 por Espressif Systems e instálalo.
-3. Instalar Librerías Requeridas
-El archivo Soccket.ino requiere una librería externa para el manejo de WebSockets.
-
-Ve a Herramientas > Administrar bibliotecas...
-
-Busca WebSockets (desarrollada por Markus Sattler).
-
-Instala la versión más reciente.
-
-📂 Cómo Abrir los Proyectos
-Descarga o clona este repositorio en tu computadora.
-
-Navega hasta la carpeta del firmware que deseas probar:
-
-Para la configuración WiFi dinámica: abre la carpeta SincronizacionBluetooth y haz doble clic en SincronizacionBluetooth.ino.
-
-Para la comunicación en tiempo real: abre la carpeta Soccket y haz doble clic en Soccket.ino.
-
-En Arduino IDE, selecciona tu placa en Herramientas > Placa > esp32 > ESP32 Dev Module (o el modelo exacto que utilices) y el puerto COM correcto en Herramientas > Puerto.
-
-💻 Guía de Uso de los Códigos
-1. Sincronización WiFi por BLE y Web (SincronizacionBluetooth.ino)
-Este script permite inicializar el ESP32 sin credenciales fijas en el código. Permite configurarlo desde una app móvil por Bluetooth o desde un navegador web.
-
-Hardware Opcional (Indicadores LED):
-
-Pin 2: LED indicador de modo configuración / Conexión BLE.
-
-Pin 4: LED indicador de estado de la conexión WiFi (parpadea al conectar, fijo al tener éxito).
-
-¿Cómo usarlo?
-Modo BLE: Al encenderse, el ESP32 comenzará a emitir una señal Bluetooth con el nombre ESP32_Config.
-
-Usando una app de terminal BLE (como nRF Connect o Serial Bluetooth Terminal), conéctate al dispositivo.
-
-Envía las credenciales de tu red WiFi a la característica correspondiente (WIFI_CHAR_UUID) utilizando estrictamente el formato: TuSSID|TuContraseña.
-
-El ESP32 guardará estos datos en su memoria EEPROM (para no perderlos al apagarse) e intentará conectarse.
-
-Modo Web: Una vez conectado a la red, obtendrá una IP. Si entras a esa dirección IP desde el navegador de tu computadora o celular (ej. http://192.168.1.X), verás un panel visual para monitorear el estado de la señal, la red o cambiar las credenciales de manera gráfica.
-
-2. Cliente WebSockets (Soccket.ino)
-Este script sirve para conectar el ESP32 a un servidor en la nube (por defecto configurado en Render) y enviar/recibir mensajes de texto en tiempo real de manera bidireccional.
-
-Configuración previa en el código:
-Antes de cargarlo, debes editar las siguientes constantes al inicio del archivo según tu entorno:
-
-C++
-const char* WIFI_SSID = "Tu_Red_WiFi";       // Nombre de tu red de pruebas
-const char* WIFI_PASSWORD = "Tu_Contraseña"; // Contraseña de tu red
-const char* DEVICE_KEY = "esp32-b";          // Identificador único de este dispositivo
-const char* TARGET_DEVICE_KEY = "esp32-a";   // Dispositivo destino al que deseas comunicarte
-¿Cómo usarlo?
-Carga el código al ESP32 y abre el Monitor Serie (115200 baudios).
-
-El dispositivo se conectará automáticamente a la red WiFi configurada y establecerá un canal seguro wss://pruebasocket.onrender.com/ws usando SSL.
-
-Para Recibir: Cualquier mensaje enviado desde el servidor o desde el TARGET_DEVICE_KEY se imprimirá automáticamente en tu Monitor Serie bajo el tag [WS] Mensaje recibido:.
-
-Para Enviar: Escribe cualquier texto directamente en la barra de texto superior del Monitor Serie del Arduino IDE y presiona Enter. El ESP32 leerá esa entrada y la enviará de inmediato al servidor WebSocket.
-</file>
-
 <file path="CameraWebServer/CameraWebServer.ino">
 #include <Arduino.h>
 #include "esp_camera.h"
@@ -3892,6 +3920,33 @@ Para Enviar: Escribe cualquier texto directamente en la barra de texto superior 
 
 WebSocketsClient webSocket;
 
+// Certificado Let's Encrypt ISRG Root X1 (Usado por Render y la mayoría de servicios web)
+const char* rootCACertificate = \
+"-----BEGIN CERTIFICATE-----\n" \
+"MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n" \
+"TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n" \
+"cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\n" \
+"WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\n" \
+"ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\n" \
+"MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc\n" \
+"h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+\n" \
+"0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U\n" \
+"A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW\n" \
+"T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH\n" \
+"B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC\n" \
+"B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv\n" \
+"KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn\n" \
+"OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn\n" \
+"jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw\n" \
+"qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI\n" \
+"rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV\n" \
+"HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq\n" \
+"hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL\n" \
+"ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ\n" \
+"3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK\n" \
+"NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5\n" \
+"ORAzI4JMPJ+GslWYHb4phow\n" \
+"-----END CERTIFICATE-----\n";
 // ===========================
 // Select camera model in board_config.h
 // ===========================
@@ -4236,10 +4291,12 @@ void setup() {
       }
       
       Serial.println("Conectando a WS Host: " + host + " Port: " + String(port) + " Path: " + wsPath);
+      
       if (isWss) {
-          webSocket.beginSSL(host, port, wsPath);
+          // Usamos beginSSL con protocolo vacío ("") para evitar rechazos
+          webSocket.beginSSL(host.c_str(), port, wsPath.c_str(), "", "");
       } else {
-          webSocket.begin(host, port, wsPath);
+          webSocket.begin(host.c_str(), port, wsPath.c_str(), "");
       }
       webSocket.onEvent(webSocketEvent);
       webSocket.setReconnectInterval(5000);
@@ -4270,6 +4327,33 @@ void loop() {
 
 WebSocketsClient webSocket;
 
+// Certificado Let's Encrypt ISRG Root X1 (Usado por Render y la mayoría de servicios web)
+const char* rootCACertificate = \
+"-----BEGIN CERTIFICATE-----\n" \
+"MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n" \
+"TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n" \
+"cmNoIEdyb3VwMRUwEwYDVQQDEwxJU1JHIFJvb3QgWDEwHhcNMTUwNjA0MTEwNDM4\n" \
+"WhcNMzUwNjA0MTEwNDM4WjBPMQswCQYDVQQGEwJVUzEpMCcGA1UEChMgSW50ZXJu\n" \
+"ZXQgU2VjdXJpdHkgUmVzZWFyY2ggR3JvdXAxFTATBgNVBAMTDElTUkcgUm9vdCBY\n" \
+"MTCCAiIwDQYJKoZIhvcNAQEBBQADggIPADCCAgoCggIBAK3oJHP0FDfzm54rVygc\n" \
+"h77ct984kIxuPOZXoHj3dcKi/vVqbvYATyjb3miGbESTtrFj/RQSa78f0uoxmyF+\n" \
+"0TM8ukj13Xnfs7j/EvEhmkvBioZxaUpmZmyPfjxwv60pIgbz5MDmgK7iS4+3mX6U\n" \
+"A5/TR5d8mUgjU+g4rk8Kb4Mu0UlXjIB0ttov0DiNewNwIRt18jA8+o+u3dpjq+sW\n" \
+"T8KOEUt+zwvo/7V3LvSye0rgTBIlDHCNAymg4VMk7BPZ7hm/ELNKjD+Jo2FR3qyH\n" \
+"B5T0Y3HsLuJvW5iB4YlcNHlsdu87kGJ55tukmi8mxdAQ4Q7e2RCOFvu396j3x+UC\n" \
+"B5iPNgiV5+I3lg02dZ77DnKxHZu8A/lJBdiB3QW0KtZB6awBdpUKD9jf1b0SHzUv\n" \
+"KBds0pjBqAlkd25HN7rOrFleaJ1/ctaJxQZBKT5ZPt0m9STJEadao0xAH0ahmbWn\n" \
+"OlFuhjuefXKnEgV4We0+UXgVCwOPjdAvBbI+e0ocS3MFEvzG6uBQE3xDk3SzynTn\n" \
+"jh8BCNAw1FtxNrQHusEwMFxIt4I7mKZ9YIqioymCzLq9gwQbooMDQaHWBfEbwrbw\n" \
+"qHyGO0aoSCqI3Haadr8faqU9GY/rOPNk3sgrDQoo//fb4hVC1CLQJ13hef4Y53CI\n" \
+"rU7m2Ys6xt0nUW7/vGT1M0NPAgMBAAGjQjBAMA4GA1UdDwEB/wQEAwIBBjAPBgNV\n" \
+"HRMBAf8EBTADAQH/MB0GA1UdDgQWBBR5tFnme7bl5AFzgAiIyBpY9umbbjANBgkq\n" \
+"hkiG9w0BAQsFAAOCAgEAVR9YqbyyqFDQDLHYGmkgJykIrGF1XIpu+ILlaS/V9lZL\n" \
+"ubhzEFnTIZd+50xx+7LSYK05qAvqFyFWhfFQDlnrzuBZ6brJFe+GnY+EgPbk6ZGQ\n" \
+"3BebYhtF8GaV0nxvwuo77x/Py9auJ/GpsMiu/X1+mvoiBOv/2X/qkSsisRcOj/KK\n" \
+"NFtY2PwByVS5uCbMiogziUwthDyC3+6WVwW6LLv3xLfHTjuCvjHIInNzktHCgKQ5\n" \
+"ORAzI4JMPJ+GslWYHb4phow\n" \
+"-----END CERTIFICATE-----\n";
 // Configuración EEPROM
 #define EEPROM_SIZE 1024
 #define SSID_ADDR 0
@@ -4686,9 +4770,6 @@ void setup() {
             esp32IP = WiFi.localIP().toString();
             Serial.println("WiFi conectado");
 
-            Serial.println("Iniciando BLE para permitir configuración mientras está conectado a WiFi...");
-            initBLE();
-
             calibrarACS712();
 
             // Intentar conectar al WebSocket
@@ -4723,9 +4804,10 @@ void setup() {
                 Serial.println("[DEBUG] WS SSL: " + String(isWss ? "true" : "false"));
                 
                 if (isWss) {
-                    webSocket.beginSSL(host, port, wsPath);
+                    // Usamos beginSSL con protocolo vacío ("") para evitar que ASP.NET Core rechace la subconexión
+                    webSocket.beginSSL(host.c_str(), port, wsPath.c_str(), "", "");
                 } else {
-                    webSocket.begin(host, port, wsPath);
+                    webSocket.begin(host.c_str(), port, wsPath.c_str(), "");
                 }
                 webSocket.onEvent(webSocketEvent);
                 webSocket.setReconnectInterval(5000);
