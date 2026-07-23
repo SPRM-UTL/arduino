@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <WiFi.h>
+
 #include <EEPROM.h>
 #include <esp_system.h>
 #include <esp_mac.h>
@@ -11,7 +12,8 @@
 
 WebSocketsClient webSocket;
 
-const char* rootCACertificate =
+// Certificado Let's Encrypt ISRG Root X1 (Usado por Render y la mayoría de servicios web)
+const char* rootCACertificate = \
 "-----BEGIN CERTIFICATE-----\n" \
 "MIIFazCCA1OgAwIBAgIRAIIQz7DSQONZRGPgu2OCiwAwDQYJKoZIhvcNAQELBQAw\n" \
 "TzELMAkGA1UEBhMCVVMxKTAnBgNVBAoTIEludGVybmV0IFNlY3VyaXR5IFJlc2Vh\n" \
@@ -38,7 +40,7 @@ const char* rootCACertificate =
 "ORAzI4JMPJ+GslWYHb4phow\n" \
 "-----END CERTIFICATE-----\n";
 
-// EEPROM
+// Configuración EEPROM
 #define EEPROM_SIZE 1024
 #define SSID_ADDR 0
 #define PASS_ADDR 100
@@ -49,7 +51,7 @@ const char* rootCACertificate =
 #define MAX_URL_LEN 128
 #define MAX_TOKEN_LEN 512
 
-// BLE
+// Configuración BLE (mismos UUIDs que el multisocket para compatibilidad con la app)
 #define SERVICE_UUID        "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define WIFI_CHAR_UUID      "beb5483e-36e1-4688-b7f5-ea07361b26a9"
 #define IP_CHAR_UUID        "beb5483e-36e1-4688-b7f5-ea07361b26aa"
@@ -64,56 +66,123 @@ String currentToken = "";
 String esp32IP = "";
 bool shouldRestart = false;
 
-// Pins
-const int RELE_PINS[4] = {26, 25, 33, 32};
+// ─── Ventilador: 3 velocidades, SOLO UNA activa a la vez (lógica exclusiva) ───
+// Esta es la única diferencia real de lógica frente al multisocket:
+// el multisocket permite varios relés encendidos al mismo tiempo (independientes),
+// el ventilador NO: encender una velocidad apaga automáticamente las demás.
+#define NUM_CANALES 3
+bool relayEncendido[NUM_CANALES] = {false, false, false};
+const int RELE_PINS[NUM_CANALES] = {26, 25, 33};
 const int ACS712_PIN = 34;
 const int STATUS_LED_PIN = 2;
 const bool RELAY_ACTIVE_LOW = false;
-
-// Energy monitoring
 const float VOLTAJE_RED = 127.0f;
 const float SENSIBILIDAD_ACS712 = 0.185f;
+const unsigned long TELEMETRY_INTERVAL_MS = 30000;
+
 float baseAdc = 0;
 float energiaWh = 0;
 unsigned long lastEnergySampleMs = 0;
 unsigned long lastTelemetryMs = 0;
 bool sensorCalibrado = false;
-const unsigned long TELEMETRY_INTERVAL_MS = 30000;
+bool simularDatos = false;
 
-// State - solo uno encendido a la vez
-bool relayEncendido[4] = {false, false, false, false};
-int relayActivo = 0; // 0 = ninguno, 1-4 = canal activo
-
-// ─── Bluetooth MAC ───
 String getBluetoothMac() {
     uint8_t btMac[6];
     esp_read_mac(btMac, ESP_MAC_BT);
     char macStr[18];
-    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X",
-             btMac[0], btMac[1], btMac[2], btMac[3], btMac[4], btMac[5]);
+    snprintf(macStr, sizeof(macStr), "%02X:%02X:%02X:%02X:%02X:%02X", btMac[0], btMac[1], btMac[2], btMac[3], btMac[4], btMac[5]);
     return String(macStr);
 }
 
-// ─── ACS712 ───
+float getCorriente();
+float getPotencia(float corriente);
+
+String buildStatusPayload() {
+    float corriente = getCorriente();
+    float potencia = getPotencia(corriente);
+
+    String payload = "{\"event\":\"state\"";
+    payload += ",\"estado1\":" + String(relayEncendido[0] ? "true" : "false");
+    payload += ",\"estado2\":" + String(relayEncendido[1] ? "true" : "false");
+    payload += ",\"estado3\":" + String(relayEncendido[2] ? "true" : "false");
+    payload += ",\"corriente\":";
+    payload += String(corriente, 3);
+    payload += ",\"potencia\":";
+    payload += String(potencia, 2);
+    payload += ",\"energia\":";
+    payload += String(energiaWh, 3);
+    payload += "}";
+    return payload;
+}
+
+String buildTelemetryPayload() {
+    float corriente = getCorriente();
+    float potencia = getPotencia(corriente);
+
+    String payload = "{\"event\":\"telemetry\",\"corriente\":";
+    payload += String(corriente, 3);
+    payload += ",\"potencia\":";
+    payload += String(potencia, 2);
+    payload += ",\"energia\":";
+    payload += String(energiaWh, 3);
+    payload += ",\"estado1\":" + String(relayEncendido[0] ? "true" : "false");
+    payload += ",\"estado2\":" + String(relayEncendido[1] ? "true" : "false");
+    payload += ",\"estado3\":" + String(relayEncendido[2] ? "true" : "false");
+    payload += "}";
+    return payload;
+}
+
 void calibrarACS712() {
+    if (simularDatos) {
+        sensorCalibrado = true;
+        Serial.println("[Meter] ACS712 simulación calibrada.");
+        return;
+    }
+
     long suma = 0;
+
     for (int i = 0; i < 1000; i++) {
         suma += analogRead(ACS712_PIN);
         delay(2);
     }
+
     baseAdc = suma / 1000.0f;
     sensorCalibrado = true;
     Serial.printf("[Meter] ACS712 calibrado. Base ADC: %.2f\n", baseAdc);
 }
 
+float simularInformacion() {
+    if (!simularDatos) return 0.0f;
+
+    bool anyOn = relayEncendido[0] || relayEncendido[1] || relayEncendido[2];
+    if (anyOn) {
+        return 1.3f + (random(-10, 10) / 100.0f);
+    } else {
+        return 0.08f + (random(-2, 2) / 100.0f);
+    }
+}
+
 float getCorriente() {
-    if (!sensorCalibrado) return 0.0f;
+    if (simularDatos) {
+        return simularInformacion();
+    }
+
+    if (!sensorCalibrado) {
+        return 0.0f;
+    }
+
     int adc = analogRead(ACS712_PIN);
     float voltaje = (adc / 4095.0f) * 3.3f;
     float voltajeBase = (baseAdc / 4095.0f) * 3.3f;
-    float corriente = abs((voltajeBase - voltaje) / SENSIBILIDAD_ACS712);
-    bool anyOn = relayEncendido[0] || relayEncendido[1] || relayEncendido[2] || relayEncendido[3];
-    if (corriente < 0.05f || !anyOn) corriente = 0.0f;
+    float corriente = (voltajeBase - voltaje) / SENSIBILIDAD_ACS712;
+    corriente = abs(corriente);
+
+    bool anyOn = relayEncendido[0] || relayEncendido[1] || relayEncendido[2];
+    if (corriente < 0.05f || !anyOn) {
+        corriente = 0.0f;
+    }
+
     return corriente;
 }
 
@@ -123,69 +192,103 @@ float getPotencia(float corriente) {
 
 void actualizarEnergia(float potencia) {
     unsigned long now = millis();
-    if (lastEnergySampleMs == 0) { lastEnergySampleMs = now; return; }
-    float horas = (now - lastEnergySampleMs) / 3600000.0f;
-    bool anyOn = relayEncendido[0] || relayEncendido[1] || relayEncendido[2] || relayEncendido[3];
-    if (anyOn && potencia > 0) energiaWh += potencia * horas;
-    lastEnergySampleMs = now;
-}
 
-// ─── Relay Control (exclusivo: solo uno a la vez) ───
-void activarCanal(int canal) {
-    // Apaga todos
-    for (int i = 0; i < 4; i++) {
-        digitalWrite(RELE_PINS[i], RELAY_ACTIVE_LOW ? HIGH : LOW);
-        relayEncendido[i] = false;
-    }
-    relayActivo = 0;
-
-    // Si canal = 0 significa apagar todos
-    if (canal == 0 || canal < 1 || canal > 3) {
-        digitalWrite(STATUS_LED_PIN, LOW);
-        sendCurrentState();
+    if (lastEnergySampleMs == 0) {
+        lastEnergySampleMs = now;
         return;
     }
 
-    // Enciende solo el canal solicitado
-    digitalWrite(RELE_PINS[canal - 1], RELAY_ACTIVE_LOW ? LOW : HIGH);
-    relayEncendido[canal - 1] = true;
-    relayActivo = canal;
-    digitalWrite(STATUS_LED_PIN, HIGH);
+    float horas = (now - lastEnergySampleMs) / 3600000.0f;
 
-    Serial.printf("--- COMANDO: ENCENDER CANAL %d ---\n", canal);
-    sendCurrentState();
+    bool anyOn = relayEncendido[0] || relayEncendido[1] || relayEncendido[2];
+    if (anyOn) {
+        energiaWh += potencia * horas;
+    }
+
+    lastEnergySampleMs = now;
 }
 
-// ─── State Reporting ───
-String buildStatusPayload() {
-    float corriente = getCorriente();
-    float potencia = getPotencia(corriente);
-
-    String payload = "{\"event\":\"state\"";
-    payload += ",\"estado1\":" + String(relayEncendido[0] ? "true" : "false");
-    payload += ",\"estado2\":" + String(relayEncendido[1] ? "true" : "false");
-    payload += ",\"estado3\":" + String(relayEncendido[2] ? "true" : "false");
-    payload += ",\"corriente\":" + String(corriente, 3);
-    payload += ",\"potencia\":" + String(potencia, 2);
-    payload += ",\"energia\":" + String(energiaWh, 3);
-    payload += "}";
-    return payload;
-}
-
-void sendCurrentState() {
-    if (webSocket.isConnected()) {
-        webSocket.sendTXT(buildStatusPayload());
+void sendTelemetry() {
+    if (WiFi.status() == WL_CONNECTED && webSocket.isConnected()) {
+        String payload = buildTelemetryPayload();
+        Serial.println("[WebSocket] Enviando telemetría: " + payload);
+        webSocket.sendTXT(payload);
     }
 }
 
-// ─── WebSocket Events ───
+void updateMetering() {
+    float corriente = getCorriente();
+    float potencia = getPotencia(corriente);
+    actualizarEnergia(potencia);
+}
+
+String urlEncode(const String& value) {
+    const char* hex = "0123456789ABCDEF";
+    String encoded = "";
+    for (size_t i = 0; i < value.length(); i++) {
+        char c = value.charAt(i);
+        bool safe =
+            (c >= 'A' && c <= 'Z') ||
+            (c >= 'a' && c <= 'z') ||
+            (c >= '0' && c <= '9') ||
+            c == '-' || c == '_' || c == '.' || c == '~';
+
+        if (safe) {
+            encoded += c;
+        } else {
+            encoded += '%';
+            encoded += hex[(c >> 4) & 0x0F];
+            encoded += hex[c & 0x0F];
+        }
+    }
+    return encoded;
+}
+
+void sendCurrentState() {
+    if (WiFi.status() == WL_CONNECTED) {
+        String payload = buildStatusPayload();
+        Serial.println("[WebSocket] Enviando estado: " + payload);
+        webSocket.sendTXT(payload);
+    }
+}
+
+// ─── Única diferencia de lógica frente al multisocket ───
+// setPowerState(index, true) apaga TODOS los demás canales antes de encender
+// el solicitado, porque el ventilador solo puede tener una velocidad activa.
+// setPowerState(index, false) simplemente apaga ese canal (y con él, el ventilador).
+void setPowerState(int index, bool encendido) {
+    if (index < 0 || index >= NUM_CANALES) return;
+
+    if (encendido) {
+        // Apaga todos los canales antes de encender el nuevo (exclusividad)
+        for (int i = 0; i < NUM_CANALES; i++) {
+            if (i != index && relayEncendido[i]) {
+                relayEncendido[i] = false;
+                digitalWrite(RELE_PINS[i], RELAY_ACTIVE_LOW ? HIGH : LOW);
+            }
+        }
+        relayEncendido[index] = true;
+        digitalWrite(RELE_PINS[index], RELAY_ACTIVE_LOW ? LOW : HIGH);
+        Serial.printf("--- COMANDO: ENCENDER VELOCIDAD %d ---\n", index + 1);
+    } else {
+        relayEncendido[index] = false;
+        digitalWrite(RELE_PINS[index], RELAY_ACTIVE_LOW ? HIGH : LOW);
+        Serial.printf("--- COMANDO: APAGAR VELOCIDAD %d ---\n", index + 1);
+    }
+
+    bool anyOn = relayEncendido[0] || relayEncendido[1] || relayEncendido[2];
+    digitalWrite(STATUS_LED_PIN, anyOn ? HIGH : LOW);
+
+    sendCurrentState();
+}
+
 void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     switch(type) {
         case WStype_DISCONNECTED:
             Serial.println("[WSc] Desconectado del servidor WebSocket");
             break;
         case WStype_CONNECTED:
-            Serial.printf("[WSc] Conectado a: %s\n", payload);
+            Serial.printf("[WSc] Conectado a la url: %s\n", payload);
             sendCurrentState();
             break;
         case WStype_TEXT: {
@@ -193,16 +296,20 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
             text.trim();
             Serial.printf("[WSc] Comando recibido: '%s'\n", text.c_str());
 
-            // Formato MultiSocket compatible: ON1/OFF1, ON2/OFF2, ON3/OFF3
-            if (text == "ON1")      activarCanal(1);
-            else if (text == "OFF1") activarCanal(0);
-            else if (text == "ON2")  activarCanal(2);
-            else if (text == "OFF2") activarCanal(0);
-            else if (text == "ON3")  activarCanal(3);
-            else if (text == "OFF3") activarCanal(0);
-            else if (text == "OFF")  activarCanal(0);
-            // Compatibilidad: ON por defecto activa canal 1
-            else if (text == "ON")   activarCanal(1);
+            if (text == "C1_ON" || text == "ON1") setPowerState(0, true);
+            else if (text == "C1_OFF" || text == "OFF1") setPowerState(0, false);
+            else if (text == "C2_ON" || text == "ON2") setPowerState(1, true);
+            else if (text == "C2_OFF" || text == "OFF2") setPowerState(1, false);
+            else if (text == "C3_ON" || text == "ON3") setPowerState(2, true);
+            else if (text == "C3_OFF" || text == "OFF3") setPowerState(2, false);
+            // Compatibilidad hacia atrás (ON/OFF genérico controla la velocidad 1)
+            else if (text == "ON" || text == "FAN_ON") setPowerState(0, true);
+            else if (text == "OFF" || text == "FAN_OFF") {
+                // "OFF" genérico apaga cualquier velocidad que esté activa
+                for (int i = 0; i < NUM_CANALES; i++) {
+                    if (relayEncendido[i]) { setPowerState(i, false); break; }
+                }
+            }
             else {
                 Serial.printf("[WSc] Comando desconocido: '%s'\n", text.c_str());
             }
@@ -216,7 +323,6 @@ void webSocketEvent(WStype_t type, uint8_t * payload, size_t length) {
     }
 }
 
-// ─── EEPROM ───
 void saveWiFiCredentials(String ssid, String password, String url, String token) {
     Serial.println("Guardando credenciales WiFi, URL y Token...");
     for (int i = SSID_ADDR; i < SSID_ADDR + MAX_SSID_LEN; i++) EEPROM.write(i, 0);
@@ -224,10 +330,10 @@ void saveWiFiCredentials(String ssid, String password, String url, String token)
     for (int i = URL_ADDR; i < URL_ADDR + MAX_URL_LEN; i++) EEPROM.write(i, 0);
     for (int i = TOKEN_ADDR; i < TOKEN_ADDR + MAX_TOKEN_LEN; i++) EEPROM.write(i, 0);
 
-    for (unsigned int i = 0; i < ssid.length() && i < MAX_SSID_LEN; i++) EEPROM.write(SSID_ADDR + i, ssid[i]);
-    for (unsigned int i = 0; i < password.length() && i < MAX_PASS_LEN; i++) EEPROM.write(PASS_ADDR + i, password[i]);
-    for (unsigned int i = 0; i < url.length() && i < MAX_URL_LEN; i++) EEPROM.write(URL_ADDR + i, url[i]);
-    for (unsigned int i = 0; i < token.length() && i < MAX_TOKEN_LEN; i++) EEPROM.write(TOKEN_ADDR + i, token[i]);
+    for (int i = 0; i < ssid.length() && i < MAX_SSID_LEN; i++) EEPROM.write(SSID_ADDR + i, ssid[i]);
+    for (int i = 0; i < password.length() && i < MAX_PASS_LEN; i++) EEPROM.write(PASS_ADDR + i, password[i]);
+    for (int i = 0; i < url.length() && i < MAX_URL_LEN; i++) EEPROM.write(URL_ADDR + i, url[i]);
+    for (int i = 0; i < token.length() && i < MAX_TOKEN_LEN; i++) EEPROM.write(TOKEN_ADDR + i, token[i]);
 
     if (EEPROM.commit()) {
         Serial.println("Credenciales, URL y Token guardados exitosamente");
@@ -274,7 +380,6 @@ void loadWiFiCredentials() {
     }
 }
 
-// ─── BLE ───
 class MyServerCallbacks: public BLEServerCallbacks {
     void onConnect(BLEServer* pServer) {
         deviceConnected = true;
@@ -306,6 +411,7 @@ class WifiConfigCallback: public BLECharacteristicCallbacks {
                     pIpCharacteristic->setValue(estadoBle.c_str());
                     pIpCharacteristic->notify();
                 }
+
                 Serial.println("Configuración recibida, reiniciando pronto...");
                 shouldRestart = true;
             } else {
@@ -319,96 +425,35 @@ void initBLE() {
     BLEDevice::init("VentiladorInteligente");
     BLEServer *pServer = BLEDevice::createServer();
     pServer->setCallbacks(new MyServerCallbacks());
-
     BLEService *pService = pServer->createService(SERVICE_UUID);
 
     pWifiCharacteristic = pService->createCharacteristic(
         WIFI_CHAR_UUID,
-        BLECharacteristic::PROPERTY_READ |
         BLECharacteristic::PROPERTY_WRITE
     );
     pWifiCharacteristic->setCallbacks(new WifiConfigCallback());
 
     pIpCharacteristic = pService->createCharacteristic(
         IP_CHAR_UUID,
-        BLECharacteristic::PROPERTY_READ |
-        BLECharacteristic::PROPERTY_NOTIFY
+        BLECharacteristic::PROPERTY_READ | BLECharacteristic::PROPERTY_NOTIFY
     );
     pIpCharacteristic->addDescriptor(new BLE2902());
 
     pService->start();
-
     BLEAdvertising *pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(SERVICE_UUID);
     pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x06);
     pAdvertising->setMinPreferred(0x12);
     BLEDevice::startAdvertising();
-
-    Serial.println("BLE Ventilador Inteligente listo para configuración");
+    Serial.println("BLE iniciado (Ventilador Inteligente), esperando conexiones...");
 }
 
-// ─── WiFi + WebSocket ───
-void connectWiFi() {
-    Serial.printf("Conectando a WiFi: %s\n", currentSSID.c_str());
-    WiFi.begin(currentSSID.c_str(), currentPassword.c_str());
-    int attempts = 0;
-    while (WiFi.status() != WL_CONNECTED && attempts < 20) {
-        delay(500);
-        Serial.print(".");
-        attempts++;
-    }
-    if (WiFi.status() == WL_CONNECTED) {
-        esp32IP = WiFi.localIP().toString();
-        Serial.println("\nWiFi conectado: " + esp32IP);
-    } else {
-        Serial.println("\nError al conectar WiFi");
-    }
-}
-
-void connectWebSocket() {
-    if (currentBackendUrl.length() == 0) {
-        Serial.println("[WSc] No hay URL del backend configurada");
-        return;
-    }
-
-    String url = currentBackendUrl;
-    int port = 443;
-    bool useSSL = true;
-
-    if (url.startsWith("https://")) {
-        url = url.substring(8);
-    } else if (url.startsWith("http://")) {
-        url = url.substring(7);
-        port = 80;
-        useSSL = false;
-    }
-
-    int colonPos = url.indexOf(':');
-    int slashPos = url.indexOf('/');
-    if (colonPos != -1 && (slashPos == -1 || colonPos < slashPos)) {
-        port = url.substring(colonPos + 1, slashPos != -1 ? slashPos : url.length()).toInt();
-        url = url.substring(0, colonPos);
-    }
-
-    String path = "/ws/device";
-    if (slashPos != -1) path = url.substring(slashPos);
-
-    Serial.printf("[WSc] Conectando a %s:%d%s (SSL=%d)\n", url.c_str(), port, path.c_str(), useSSL);
-
-    if (useSSL) {
-        webSocket.setCACert(rootCACertificate);
-    }
-    webSocket.begin(url.c_str(), port, path.c_str());
-    webSocket.onEvent(webSocketEvent);
-    webSocket.setReconnectInterval(5000);
-}
-
-// ─── Setup & Loop ───
 void setup() {
     Serial.begin(115200);
+    Serial.setDebugOutput(true);
 
-    for (int i = 0; i < 4; i++) {
+    for (int i = 0; i < NUM_CANALES; i++) {
         pinMode(RELE_PINS[i], OUTPUT);
         digitalWrite(RELE_PINS[i], RELAY_ACTIVE_LOW ? HIGH : LOW);
     }
@@ -416,46 +461,116 @@ void setup() {
     digitalWrite(STATUS_LED_PIN, LOW);
 
     pinMode(ACS712_PIN, INPUT);
+    Serial.println();
+    Serial.println("=== Iniciando Ventilador Inteligente ESP32 (Manordomo) ===");
 
-    EEPROM.begin(EEPROM_SIZE);
-    loadWiFiCredentials();
-
-    calibrarACS712();
-
-    if (currentSSID.length() > 0) {
-        connectWiFi();
-        if (WiFi.status() == WL_CONNECTED) {
-            connectWebSocket();
-        }
-    } else {
-        Serial.println("No hay WiFi configurado. Modo AP + BLE.");
+    if (!EEPROM.begin(EEPROM_SIZE)) {
+        Serial.println("Error al inicializar EEPROM");
     }
 
-    initBLE();
+    loadWiFiCredentials();
+
+    if (currentSSID.length() > 0) {
+        currentSSID.trim();
+        currentPassword.trim();
+
+        Serial.println("Conectando a Wi-Fi: [" + currentSSID + "]");
+
+        WiFi.mode(WIFI_STA);
+        delay(100);
+
+        WiFi.begin(currentSSID.c_str(), currentPassword.c_str());
+        WiFi.setSleep(false);
+
+        int attempts = 0;
+        while (WiFi.status() != WL_CONNECTED && attempts < 40) {
+            delay(500);
+            Serial.print(".");
+            attempts++;
+        }
+        Serial.println();
+
+        if (WiFi.status() == WL_CONNECTED) {
+            esp32IP = WiFi.localIP().toString();
+            Serial.println("WiFi conectado");
+            calibrarACS712();
+
+            if (currentBackendUrl.length() > 0) {
+                String macAddress = getBluetoothMac();
+
+                String wsPath = "/ws?deviceKey=" + urlEncode(macAddress);
+                if (currentToken.length() > 0) {
+                    wsPath += "&token=" + urlEncode(currentToken);
+                }
+
+                bool isWss = currentBackendUrl.startsWith("wss://");
+                String host = currentBackendUrl;
+                if (isWss) host.replace("wss://", "");
+                else host.replace("ws://", "");
+
+                int slashIndex = host.indexOf('/');
+                if (slashIndex != -1) host = host.substring(0, slashIndex);
+
+                int port = isWss ? 443 : 80;
+                int colonIndex = host.indexOf(':');
+                if (colonIndex != -1) {
+                    port = host.substring(colonIndex + 1).toInt();
+                    host = host.substring(0, colonIndex);
+                }
+
+                if (isWss) {
+                    webSocket.beginSSL(host.c_str(), port, wsPath.c_str(), "", "");
+                } else {
+                    webSocket.begin(host.c_str(), port, wsPath.c_str(), "");
+                }
+
+                webSocket.onEvent(webSocketEvent);
+                webSocket.setReconnectInterval(5000);
+                webSocket.enableHeartbeat(15000, 10000, 2);
+            }
+
+        } else {
+            Serial.println("Error al conectar a WiFi. Apagando antena Wi-Fi...");
+            WiFi.disconnect(true, true);
+            WiFi.mode(WIFI_OFF);
+            delay(500);
+            initBLE();
+        }
+    } else {
+        Serial.println("No hay configuración Wi-Fi guardada.");
+        initBLE();
+    }
 }
 
 void loop() {
-    webSocket.loop();
-
     if (shouldRestart) {
         delay(1000);
         ESP.restart();
     }
 
-    if (WiFi.status() == WL_CONNECTED && currentBackendUrl.length() > 0) {
+    static unsigned long lastUpdate = 0;
+    static unsigned long lastMeterTick = 0;
+    if (WiFi.status() == WL_CONNECTED) {
+        if (millis() - lastMeterTick >= 1000) {
+            updateMetering();
+            lastMeterTick = millis();
+        }
+
+        if (millis() - lastTelemetryMs >= TELEMETRY_INTERVAL_MS) {
+            sendTelemetry();
+            lastTelemetryMs = millis();
+        }
+
+        if (millis() - lastUpdate > 5000) {
+            esp32IP = WiFi.localIP().toString();
+            if (deviceConnected && pIpCharacteristic != nullptr) {
+                String estadoBle = esp32IP + "|" + getBluetoothMac();
+                pIpCharacteristic->setValue(estadoBle.c_str());
+                pIpCharacteristic->notify();
+            }
+            lastUpdate = millis();
+        }
         webSocket.loop();
     }
-
-    static unsigned long last = 0;
-    if (millis() - last >= 1000) {
-        last = millis();
-        float corriente = getCorriente();
-        float potencia = getPotencia(corriente);
-        actualizarEnergia(potencia);
-    }
-
-    if (millis() - lastTelemetryMs >= TELEMETRY_INTERVAL_MS) {
-        lastTelemetryMs = millis();
-        sendCurrentState();
-    }
+    delay(10);
 }
